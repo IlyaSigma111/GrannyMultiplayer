@@ -2,17 +2,14 @@ import { MAP, getRoomAt, gridToPixel, pixelToGrid, getObjectsInRoom } from './ma
 import { initNetwork, broadcast, updatePlayerData, getRoomData, cleanup } from './network.js';
 import { database, ref, onValue, update } from './firebase.js';
 
-// Парсим параметры URL
 const urlParams = new URLSearchParams(window.location.search);
 const roomId = urlParams.get('room');
 const playerId = urlParams.get('player');
 const isGranny = urlParams.get('granny') === 'true';
 
-// Игровые переменные
 let canvas, ctx;
 let keys = {};
 let players = {};
-let objects = [];
 let currentFloor = 1;
 let gameTime = 120;
 let gameTimer = null;
@@ -20,7 +17,6 @@ let isGameActive = false;
 let isHiding = false;
 let hidingSpot = null;
 
-// Состояние текущего игрока
 const player = {
     id: playerId,
     x: 5 * MAP.gridSize,
@@ -36,39 +32,25 @@ const player = {
     lastUpdate: Date.now()
 };
 
-// Инициализация игры
 window.addEventListener('DOMContentLoaded', () => {
     canvas = document.getElementById('gameCanvas');
     ctx = canvas.getContext('2d');
     
-    // Устанавливаем размеры канваса
     canvas.width = MAP.width * MAP.gridSize;
     canvas.height = MAP.height * MAP.gridSize;
     
-    // Настройка интерфейса
     document.getElementById('roleText').textContent = isGranny ? 'Granny 👵' : 'Выживший 🏃';
     document.getElementById('roleText').style.color = isGranny ? '#ff4757' : '#00ff88';
     
-    // Инициализация сети
     initNetwork(roomId, playerId);
-    
-    // Загрузка данных комнаты
     loadRoomData();
-    
-    // Начало игры
     startGame();
-    
-    // Обработка управления
     setupControls();
-    
-    // Отрисовка
     requestAnimationFrame(gameLoop);
     
-    // Очистка при выходе
     window.addEventListener('beforeunload', cleanup);
 });
 
-// Загрузка данных комнаты
 function loadRoomData() {
     getRoomData((snapshot) => {
         const data = snapshot.val();
@@ -77,52 +59,42 @@ function loadRoomData() {
             return;
         }
         
-        // Обновляем таймер
         if (data.timer !== undefined) {
             gameTime = data.timer;
             document.getElementById('timer').textContent = gameTime;
         }
         
-        // Обновляем счетчик игроков
         const playerCount = data.players ? Object.keys(data.players).length : 0;
         document.getElementById('playersCount').textContent = playerCount;
         
-        // Проверяем конец игры
         if (data.gameOver) {
             endGame(data.gameResult || 'Игра окончена!', data.winner);
         }
     });
 }
 
-// Начало игры
 function startGame() {
     isGameActive = true;
     
-    // Запускаем таймер
     gameTimer = setInterval(() => {
         if (!isGameActive) return;
         
         gameTime--;
         document.getElementById('timer').textContent = gameTime;
         
-        // Обновляем таймер в Firebase
         const roomRef = ref(database, `rooms/${roomId}`);
         update(roomRef, { timer: gameTime });
         
-        // Конец игры по времени
         if (gameTime <= 0) {
             endGame('Время вышло!', 'survivors');
         }
     }, 1000);
 }
 
-// Настройка управления
 function setupControls() {
-    // Клавиатура
     window.addEventListener('keydown', (e) => {
         keys[e.key.toLowerCase()] = true;
         
-        // Действия
         if (e.key === ' ' && !isHiding) {
             tryHide();
         }
@@ -135,7 +107,6 @@ function setupControls() {
         keys[e.key.toLowerCase()] = false;
     });
     
-    // Мобильные кнопки
     document.querySelectorAll('.d-btn').forEach(btn => {
         btn.addEventListener('touchstart', (e) => {
             e.preventDefault();
@@ -163,7 +134,6 @@ function setupControls() {
     });
 }
 
-// Попытка спрятаться
 function tryHide() {
     const gridPos = pixelToGrid(player.x, player.y);
     const room = getRoomAt(gridPos.x, gridPos.y);
@@ -195,10 +165,8 @@ function tryHide() {
     }
 }
 
-// Взаимодействие
 function interact() {
     if (isHiding) {
-        // Выход из укрытия
         isHiding = false;
         hidingSpot = null;
         player.hidden = false;
@@ -213,7 +181,6 @@ function interact() {
         return;
     }
     
-    // Проверка дверей и объектов
     const gridPos = pixelToGrid(player.x, player.y);
     const room = getRoomAt(gridPos.x, gridPos.y);
     
@@ -233,12 +200,10 @@ function interact() {
     }
 }
 
-// Обработка взаимодействия с объектом
 function handleObjectInteraction(obj) {
     switch (obj.type) {
         case 'door':
             if (obj.leadsTo === 'outside' && !obj.locked) {
-                // ПОБЕДА ВЫЖИВШИХ
                 if (!player.isGranny) {
                     endGame('Выжившие сбежали!', 'survivors');
                 }
@@ -260,34 +225,22 @@ function handleObjectInteraction(obj) {
     }
 }
 
-// Основной игровой цикл
 function gameLoop() {
     if (!isGameActive) return;
     
-    // Очистка канваса
     ctx.clearRect(0, 0, canvas.width, canvas.height);
     
-    // Отрисовка карты
     drawMap();
     
-    // Обработка движения
     if (!player.caught && (!isHiding || player.isGranny)) {
         handleMovement();
     }
     
-    // Отрисовка объектов
     drawObjects();
-    
-    // Отрисовка игроков
     drawPlayers();
-    
-    // Отрисовка текущего игрока
     drawPlayer();
-    
-    // Синхронизация состояния
     syncPlayerState();
     
-    // Проверка столкновений (для Granny)
     if (player.isGranny) {
         checkCatch();
     }
@@ -295,36 +248,29 @@ function gameLoop() {
     requestAnimationFrame(gameLoop);
 }
 
-// Отрисовка карты
 function drawMap() {
-    // Фон
     ctx.fillStyle = '#1a1a1a';
     ctx.fillRect(0, 0, canvas.width, canvas.height);
     
-    // Комнаты
     MAP.rooms.forEach(room => {
         if (room.floor !== currentFloor) return;
         
         const pixel = gridToPixel(room.x, room.y);
         const size = { w: room.w * MAP.gridSize, h: room.h * MAP.gridSize };
         
-        // Пол
         ctx.fillStyle = room.id === 'entrance' ? '#2a2a2a' : '#333';
         ctx.fillRect(pixel.x, pixel.y, size.w, size.h);
         
-        // Стены
         ctx.strokeStyle = '#555';
         ctx.lineWidth = 2;
         ctx.strokeRect(pixel.x, pixel.y, size.w, size.h);
         
-        // Название комнаты
         ctx.fillStyle = '#888';
         ctx.font = '12px Arial';
         ctx.fillText(room.name, pixel.x + 5, pixel.y + 15);
     });
 }
 
-// Отрисовка объектов
 function drawObjects() {
     MAP.objects.forEach(obj => {
         const room = MAP.rooms.find(r => r.id === obj.room);
@@ -347,13 +293,6 @@ function drawObjects() {
                 ctx.fillText('👕', pixel.x + 10, pixel.y + 25);
                 break;
                 
-            case 'bed':
-                ctx.fillStyle = '#6A1B9A';
-                ctx.fillRect(pixel.x, pixel.y, MAP.gridSize * 2, MAP.gridSize);
-                ctx.fillStyle = '#fff';
-                ctx.fillText('🛏️', pixel.x + 15, pixel.y + 25);
-                break;
-                
             case 'trap':
                 if (obj.active) {
                     ctx.fillStyle = '#ff0000';
@@ -366,25 +305,21 @@ function drawObjects() {
     });
 }
 
-// Отрисовка других игроков
 function drawPlayers() {
     Object.values(players).forEach(p => {
         if (p.id === playerId || p.floor !== currentFloor || p.caught) return;
         
         const pixel = gridToPixel(p.x, p.y);
         
-        // Игрок
         ctx.fillStyle = p.isGranny ? '#ff0000' : '#00a8ff';
         ctx.beginPath();
         ctx.arc(pixel.x + MAP.gridSize/2, pixel.y + MAP.gridSize/2, 15, 0, Math.PI * 2);
         ctx.fill();
         
-        // Имя
         ctx.fillStyle = '#fff';
         ctx.font = '10px Arial';
         ctx.fillText(p.name, pixel.x - 10, pixel.y - 5);
         
-        // Индикатор укрытия
         if (p.hidden) {
             ctx.fillStyle = 'rgba(0, 0, 0, 0.5)';
             ctx.fillRect(pixel.x - 5, pixel.y - 5, 50, 50);
@@ -392,23 +327,19 @@ function drawPlayers() {
     });
 }
 
-// Отрисовка текущего игрока
 function drawPlayer() {
     const pixel = { x: player.x, y: player.y };
     
-    // Тень
     ctx.fillStyle = 'rgba(0, 0, 0, 0.3)';
     ctx.beginPath();
     ctx.ellipse(pixel.x + 15, pixel.y + 40, 12, 5, 0, 0, Math.PI * 2);
     ctx.fill();
     
-    // Игрок
     ctx.fillStyle = player.color;
     ctx.beginPath();
     ctx.arc(pixel.x + 15, pixel.y + 15, 15, 0, Math.PI * 2);
     ctx.fill();
     
-    // Индикатор укрытия
     if (player.hidden) {
         ctx.fillStyle = 'rgba(0, 0, 0, 0.7)';
         ctx.fillRect(pixel.x - 10, pixel.y - 10, 50, 50);
@@ -416,13 +347,11 @@ function drawPlayer() {
         ctx.fillText('Спрятан', pixel.x, pixel.y - 15);
     }
     
-    // Индикатор этажа
     ctx.fillStyle = '#fff';
     ctx.font = '10px Arial';
     ctx.fillText(`Этаж ${currentFloor}`, 10, 20);
 }
 
-// Обработка движения
 function handleMovement() {
     const speed = player.isGranny ? 2 : 3;
     let moved = false;
@@ -444,17 +373,14 @@ function handleMovement() {
         moved = true;
     }
     
-    // Границы карты
     player.x = Math.max(0, Math.min(canvas.width - player.width, player.x));
     player.y = Math.max(0, Math.min(canvas.height - player.height, player.y));
     
-    // Проверка смены этажа (лестницы)
     if (moved) {
         checkFloorChange();
     }
 }
 
-// Проверка смены этажа
 function checkFloorChange() {
     const gridPos = pixelToGrid(player.x, player.y);
     
@@ -463,7 +389,6 @@ function checkFloorChange() {
             currentFloor = currentFloor === 1 ? 2 : 1;
             addLog(`Перешел на ${currentFloor} этаж`);
             
-            // Перемещаем на соответствующие координаты
             if (currentFloor === 2) {
                 player.x = 8 * MAP.gridSize;
                 player.y = 2 * MAP.gridSize;
@@ -475,7 +400,6 @@ function checkFloorChange() {
     });
 }
 
-// Проверка поимки (для Granny)
 function checkCatch() {
     Object.values(players).forEach(p => {
         if (p.isGranny || p.caught || p.hidden || p.floor !== currentFloor) return;
@@ -486,7 +410,6 @@ function checkCatch() {
         );
         
         if (dist < 30) {
-            // ПОЙМАН!
             p.caught = true;
             
             broadcast({
@@ -496,20 +419,16 @@ function checkCatch() {
             });
             
             addLog(`${p.name} пойман Granny!`);
-            
-            // Проверка конца игры
             checkGameEnd();
         }
     });
 }
 
-// Синхронизация состояния игрока
 function syncPlayerState() {
     if (Date.now() - player.lastUpdate < 100) return;
     
     player.lastUpdate = Date.now();
     
-    // Отправка состояния другим игрокам
     broadcast({
         type: 'playerState',
         playerId: playerId,
@@ -522,7 +441,6 @@ function syncPlayerState() {
         }
     });
     
-    // Обновление в Firebase
     updatePlayerData({
         x: player.x,
         y: player.y,
@@ -533,7 +451,6 @@ function syncPlayerState() {
     });
 }
 
-// Обновление состояния другого игрока
 window.gameState = {
     updatePlayer: function(id, data) {
         if (!players[id]) {
@@ -570,7 +487,6 @@ window.gameState = {
     }
 };
 
-// Проверка конца игры
 function checkGameEnd() {
     const survivors = Object.values(players).filter(p => !p.isGranny && !p.caught);
     
@@ -579,7 +495,6 @@ function checkGameEnd() {
     }
 }
 
-// Конец игры
 function endGame(message, winner) {
     isGameActive = false;
     clearInterval(gameTimer);
@@ -591,7 +506,6 @@ function endGame(message, winner) {
         winner: winner
     });
     
-    // Показываем результат
     setTimeout(() => {
         document.getElementById('resultTitle').textContent = 
             winner === 'granny' ? 'Granny победила!' : 'Выжившие победили!';
@@ -600,7 +514,6 @@ function endGame(message, winner) {
     }, 1000);
 }
 
-// Добавление сообщения в лог
 function addLog(message) {
     const log = document.getElementById('gameLog');
     const p = document.createElement('p');
@@ -609,7 +522,6 @@ function addLog(message) {
     log.scrollTop = log.scrollHeight;
 }
 
-// Вспомогательная функция
 function getObjectName(type) {
     const names = {
         closet: 'шкаф',
