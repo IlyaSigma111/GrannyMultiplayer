@@ -74,16 +74,6 @@ input {
     border-radius: 10px;
 }
 
-.warning {
-    margin-top: 20px;
-    padding: 10px;
-    background: rgba(255, 165, 0, 0.2);
-    border-left: 4px solid orange;
-    border-radius: 5px;
-    font-size: 0.9rem;
-}
-
-/* Мобильная адаптация */
 @media (max-width: 600px) {
     .container {
         padding: 20px;
