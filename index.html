@@ -1,0 +1,73 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Granny Multiplayer</title>
+    <link rel="stylesheet" href="style.css">
+    <script type="module" src="firebase.js"></script>
+</head>
+<body>
+    <!-- Экран входа -->
+    <div id="login-screen" class="screen">
+        <div class="container">
+            <h1>👵 Granny Multiplayer</h1>
+            <p>Страшная гренни ищет тебя!</p>
+            <button id="google-login" class="btn">Войти через Google</button>
+            <div id="login-status"></div>
+        </div>
+    </div>
+
+    <!-- Меню лобби -->
+    <div id="lobby-screen" class="screen hidden">
+        <div class="container">
+            <h2>👾 Лобби</h2>
+            <div class="user-info">
+                <img id="user-avatar" src="" alt="Аватар">
+                <span id="user-name"></span>
+            </div>
+            
+            <div class="lobby-controls">
+                <button id="create-room" class="btn">Создать комнату</button>
+                <button id="join-room" class="btn">Присоединиться</button>
+                <button id="logout" class="btn logout">Выйти</button>
+            </div>
+            
+            <div class="rooms-list">
+                <h3>Доступные комнаты:</h3>
+                <div id="rooms-container"></div>
+            </div>
+            
+            <div id="room-info" class="hidden">
+                <h3>Комната: <span id="room-id"></span></h3>
+                <div id="players-list"></div>
+                <button id="start-game" class="btn start">Начать игру</button>
+                <button id="leave-room" class="btn">Покинуть комнату</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Игровой экран -->
+    <div id="game-screen" class="screen hidden">
+        <canvas id="game-canvas"></canvas>
+        
+        <!-- Мобильный джойстик -->
+        <div id="mobile-controls" class="mobile-controls hidden">
+            <div class="joystick-area" id="movement-joystick">
+                <div class="joystick"></div>
+            </div>
+        </div>
+        
+        <!-- Игровой интерфейс -->
+        <div class="game-ui">
+            <div class="timer">Время: <span id="game-timer">120</span>с</div>
+            <div class="role-display" id="role-display"></div>
+            <div class="players-count">Игроков: <span id="players-count">0</span></div>
+        </div>
+        
+        <button id="exit-game" class="btn exit-btn">Выйти из игры</button>
+    </div>
+
+    <script src="game.js"></script>
+</body>
+</html>
