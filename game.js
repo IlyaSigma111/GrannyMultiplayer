@@ -1,1800 +1,622 @@
-// ==============================================
-// game.js - ПОЛНАЯ ВЕРСИЯ (рабочий онлайн-мультиплеер)
-// ==============================================
+import { MAP, getRoomAt, gridToPixel, pixelToGrid, getObjectsInRoom } from './map.js';
+import { initNetwork, broadcast, updatePlayerData, getRoomData, cleanup } from './network.js';
+import { database, ref, onValue, update } from './firebase.js';
 
-import {
-    auth,
-    loginWithGoogle,
-    logout,
-    createRoom,
-    joinRoom,
-    leaveRoom,
-    startGame,
-    updatePlayerPosition,
-    updatePlayerReady,
-    updatePlayerHiding,
-    updateRoomSettings,
-    subscribeToRoom,
-    subscribeToPlayers,
-    subscribeToRooms,
-    sendChatMessage,
-    onAuthStateChanged,
-    currentUser,
-    getPlayerStats,
-    updatePlayerStats
-} from './firebase.js';
+// Парсим параметры URL
+const urlParams = new URLSearchParams(window.location.search);
+const roomId = urlParams.get('room');
+const playerId = urlParams.get('player');
+const isGranny = urlParams.get('granny') === 'true';
 
-// ==============================================
-// КОНСТАНТЫ И ГЛОБАЛЬНЫЕ ПЕРЕМЕННЫЕ
-// ==============================================
-const SCREENS = {
-    LOGIN: 'login',
-    MENU: 'menu',
-    LOBBY: 'lobby',
-    GAME: 'game',
-    ENDGAME: 'endgame',
-    SETTINGS: 'settings'
+// Игровые переменные
+let canvas, ctx;
+let keys = {};
+let players = {};
+let objects = [];
+let currentFloor = 1;
+let gameTime = 120;
+let gameTimer = null;
+let isGameActive = false;
+let isHiding = false;
+let hidingSpot = null;
+
+// Состояние текущего игрока
+const player = {
+    id: playerId,
+    x: 5 * MAP.gridSize,
+    y: 12 * MAP.gridSize,
+    width: 30,
+    height: 30,
+    color: isGranny ? '#ff0000' : '#00a8ff',
+    name: `Игрок_${playerId.substring(0, 4)}`,
+    isGranny: isGranny,
+    floor: 1,
+    hidden: false,
+    caught: false,
+    lastUpdate: Date.now()
 };
 
-let CURRENT_SCREEN = SCREENS.LOGIN;
-let CURRENT_ROOM = null;
-let CURRENT_ROOM_DATA = null;
-let LOCAL_PLAYER = null;
-let PLAYERS = {};
-let GAME_STATE = {
-    status: 'waiting', // waiting, playing, ended
-    timeLeft: 120,
-    grannies: [],
-    runners: [],
-    hidingSpots: [],
-    items: [],
-    startTime: null
-};
-
-// Игровые настройки
-const GAME_CONFIG = {
-    GRID_SIZE: 50,
-    PLAYER_SIZE: 15,
-    GRANNY_SIZE: 20,
-    CABINET_SIZE: { width: 60, height: 100 },
-    PLAYER_SPEED: 3,
-    GRANNY_SPEED: 2.5,
-    HIDE_DISTANCE: 40,
-    CATCH_DISTANCE: 25
-};
-
-// Управление
-const KEYS = {};
-const MOBILE_CONTROLS = {
-    joystick: { x: 0, y: 0, active: false },
-    buttons: {
-        hide: false,
-        interact: false,
-        sprint: false
-    }
-};
-
-// Canvas и графика
-let CANVAS, CTX;
-let ASSETS = {};
-let CAMERA = { x: 0, y: 0, width: 0, height: 0 };
-
-// Таймеры
-let GAME_TIMER_INTERVAL = null;
-let POSITION_UPDATE_INTERVAL = null;
-
-// ==============================================
-// ИНИЦИАЛИЗАЦИЯ ИГРЫ
-// ==============================================
-function initGame() {
-    console.log('🚀 Инициализация игры...');
+// Инициализация игры
+window.addEventListener('DOMContentLoaded', () => {
+    canvas = document.getElementById('gameCanvas');
+    ctx = canvas.getContext('2d');
     
-    // Настройка canvas
-    setupCanvas();
+    // Устанавливаем размеры канваса
+    canvas.width = MAP.width * MAP.gridSize;
+    canvas.height = MAP.height * MAP.gridSize;
     
-    // Загрузка ресурсов
-    loadAssets();
+    // Настройка интерфейса
+    document.getElementById('roleText').textContent = isGranny ? 'Granny 👵' : 'Выживший 🏃';
+    document.getElementById('roleText').style.color = isGranny ? '#ff4757' : '#00ff88';
     
-    // Настройка событий
-    setupEventListeners();
+    // Инициализация сети
+    initNetwork(roomId, playerId);
     
-    // Настройка Firebase слушателей
-    setupFirebaseListeners();
+    // Загрузка данных комнаты
+    loadRoomData();
     
-    // Проверка авторизации
-    checkAuthState();
+    // Начало игры
+    startGame();
     
-    // Проверка устройства
-    checkDeviceType();
+    // Обработка управления
+    setupControls();
     
-    // Запуск игрового цикла
+    // Отрисовка
     requestAnimationFrame(gameLoop);
     
-    console.log('✅ Игра инициализирована');
-}
+    // Очистка при выходе
+    window.addEventListener('beforeunload', cleanup);
+});
 
-// ==============================================
-// НАСТРОЙКА CANVAS
-// ==============================================
-function setupCanvas() {
-    CANVAS = document.getElementById('game-canvas');
-    CTX = CANVAS.getContext('2d');
-    
-    resizeCanvas();
-    window.addEventListener('resize', resizeCanvas);
-}
-
-function resizeCanvas() {
-    const isMobile = window.innerWidth <= 768;
-    
-    if (isMobile) {
-        CANVAS.width = window.innerWidth;
-        CANVAS.height = window.innerHeight;
-        document.getElementById('mobile-controls').classList.remove('hidden');
-    } else {
-        CANVAS.width = 1200;
-        CANVAS.height = 800;
-        document.getElementById('mobile-controls').classList.add('hidden');
-    }
-    
-    CAMERA.width = CANVAS.width;
-    CAMERA.height = CANVAS.height;
-    
-    // Обновление UI
-    updateUIPositions();
-}
-
-// ==============================================
-// ЗАГРУЗКА РЕСУРСОВ
-// ==============================================
-function loadAssets() {
-    console.log('📦 Загрузка ресурсов...');
-    
-    // Создание простых спрайтов через canvas
-    createPlaceholderSprites();
-    
-    // Загрузка реальных изображений (если есть)
-    loadImages();
-}
-
-function createPlaceholderSprites() {
-    // Игрок (зеленый круг)
-    const playerCanvas = document.createElement('canvas');
-    playerCanvas.width = 40;
-    playerCanvas.height = 40;
-    const playerCtx = playerCanvas.getContext('2d');
-    
-    // Тело
-    playerCtx.fillStyle = '#4CAF50';
-    playerCtx.beginPath();
-    playerCtx.arc(20, 20, 15, 0, Math.PI * 2);
-    playerCtx.fill();
-    
-    // Глаза
-    playerCtx.fillStyle = 'white';
-    playerCtx.beginPath();
-    playerCtx.arc(15, 15, 3, 0, Math.PI * 2);
-    playerCtx.arc(25, 15, 3, 0, Math.PI * 2);
-    playerCtx.fill();
-    
-    // Улыбка
-    playerCtx.strokeStyle = 'white';
-    playerCtx.lineWidth = 2;
-    playerCtx.beginPath();
-    playerCtx.arc(20, 20, 8, 0.2 * Math.PI, 0.8 * Math.PI);
-    playerCtx.stroke();
-    
-    ASSETS.player = playerCanvas;
-    
-    // Гренни (красный круг со злым лицом)
-    const grannyCanvas = document.createElement('canvas');
-    grannyCanvas.width = 50;
-    grannyCanvas.height = 50;
-    const grannyCtx = grannyCanvas.getContext('2d');
-    
-    // Тело
-    grannyCtx.fillStyle = '#FF5252';
-    grannyCtx.beginPath();
-    grannyCtx.arc(25, 25, 20, 0, Math.PI * 2);
-    grannyCtx.fill();
-    
-    // Глаза (злые)
-    grannyCtx.fillStyle = 'white';
-    grannyCtx.beginPath();
-    grannyCtx.moveTo(18, 18);
-    grannyCtx.lineTo(22, 22);
-    grannyCtx.lineTo(18, 22);
-    grannyCtx.fill();
-    
-    grannyCtx.beginPath();
-    grannyCtx.moveTo(32, 18);
-    grannyCtx.lineTo(28, 22);
-    grannyCtx.lineTo(32, 22);
-    grannyCtx.fill();
-    
-    // Рот (сердитый)
-    grannyCtx.strokeStyle = 'white';
-    grannyCtx.lineWidth = 3;
-    grannyCtx.beginPath();
-    grannyCtx.arc(25, 30, 6, 0, Math.PI);
-    grannyCtx.stroke();
-    
-    // Волосы (седые)
-    grannyCtx.strokeStyle = '#CCCCCC';
-    grannyCtx.lineWidth = 2;
-    for(let i = 0; i < 5; i++) {
-        grannyCtx.beginPath();
-        grannyCtx.moveTo(15 + i * 3, 10);
-        grannyCtx.quadraticCurveTo(20 + i * 3, 5, 25 + i * 3, 10);
-        grannyCtx.stroke();
-    }
-    
-    ASSETS.granny = grannyCanvas;
-    
-    // Шкаф (коричневый прямоугольник)
-    const cabinetCanvas = document.createElement('canvas');
-    cabinetCanvas.width = 70;
-    cabinetCanvas.height = 110;
-    const cabinetCtx = cabinetCanvas.getContext('2d');
-    
-    // Корпус
-    cabinetCtx.fillStyle = '#8B4513';
-    cabinetCtx.fillRect(5, 5, 60, 100);
-    
-    // Дверцы
-    cabinetCtx.fillStyle = '#A0522D';
-    cabinetCtx.fillRect(10, 10, 25, 90);
-    cabinetCtx.fillRect(40, 10, 25, 90);
-    
-    // Ручки
-    cabinetCtx.fillStyle = '#FFD700';
-    cabinetCtx.beginPath();
-    cabinetCtx.arc(30, 50, 3, 0, Math.PI * 2);
-    cabinetCtx.fill();
-    
-    cabinetCtx.beginPath();
-    cabinetCtx.arc(60, 50, 3, 0, Math.PI * 2);
-    cabinetCtx.fill();
-    
-    ASSETS.cabinet = cabinetCanvas;
-    
-    // Мебель
-    const furnitureCanvas = document.createElement('canvas');
-    furnitureCanvas.width = 100;
-    furnitureCanvas.height = 100;
-    const furnitureCtx = furnitureCanvas.getContext('2d');
-    
-    furnitureCtx.fillStyle = '#795548';
-    furnitureCtx.fillRect(10, 10, 80, 80);
-    furnitureCtx.fillStyle = '#5D4037';
-    furnitureCtx.fillRect(20, 20, 60, 60);
-    
-    ASSETS.furniture = furnitureCanvas;
-    
-    // Пол
-    const floorCanvas = document.createElement('canvas');
-    floorCanvas.width = 100;
-    floorCanvas.height = 100;
-    const floorCtx = floorCanvas.getContext('2d');
-    
-    // Паркетный узор
-    floorCtx.fillStyle = '#D7CCC8';
-    floorCtx.fillRect(0, 0, 100, 100);
-    
-    floorCtx.strokeStyle = '#A1887F';
-    floorCtx.lineWidth = 1;
-    for(let i = 0; i < 10; i++) {
-        floorCtx.beginPath();
-        floorCtx.moveTo(i * 10, 0);
-        floorCtx.lineTo(i * 10, 100);
-        floorCtx.stroke();
+// Загрузка данных комнаты
+function loadRoomData() {
+    getRoomData((snapshot) => {
+        const data = snapshot.val();
+        if (!data) {
+            endGame('Комната удалена!');
+            return;
+        }
         
-        floorCtx.beginPath();
-        floorCtx.moveTo(0, i * 10);
-        floorCtx.lineTo(100, i * 10);
-        floorCtx.stroke();
-    }
-    
-    ASSETS.floor = floorCanvas;
-}
-
-function loadImages() {
-    const imageUrls = {
-        player: 'assets/player.png',
-        granny: 'assets/granny.png',
-        cabinet: 'assets/cabinet.png',
-        furniture: 'assets/furniture.png',
-        floor: 'assets/floor.png'
-    };
-    
-    let loaded = 0;
-    const total = Object.keys(imageUrls).length;
-    
-    Object.entries(imageUrls).forEach(([key, url]) => {
-        const img = new Image();
-        img.onload = () => {
-            ASSETS[key] = img;
-            loaded++;
-            console.log(`✅ Загружено: ${key}`);
-            
-            if (loaded === total) {
-                console.log('🎉 Все ресурсы загружены!');
-                showNotification('Ресурсы загружены', 'success');
-            }
-        };
-        img.onerror = () => {
-            console.warn(`⚠️ Не удалось загрузить: ${url}, использую placeholder`);
-            loaded++;
-        };
-        img.src = url;
+        // Обновляем таймер
+        if (data.timer !== undefined) {
+            gameTime = data.timer;
+            document.getElementById('timer').textContent = gameTime;
+        }
+        
+        // Обновляем счетчик игроков
+        const playerCount = data.players ? Object.keys(data.players).length : 0;
+        document.getElementById('playersCount').textContent = playerCount;
+        
+        // Проверяем конец игры
+        if (data.gameOver) {
+            endGame(data.gameResult || 'Игра окончена!', data.winner);
+        }
     });
 }
 
-// ==============================================
-// УПРАВЛЕНИЕ И СОБЫТИЯ
-// ==============================================
-function setupEventListeners() {
-    console.log('🎮 Настройка управления...');
+// Начало игры
+function startGame() {
+    isGameActive = true;
     
+    // Запускаем таймер
+    gameTimer = setInterval(() => {
+        if (!isGameActive) return;
+        
+        gameTime--;
+        document.getElementById('timer').textContent = gameTime;
+        
+        // Обновляем таймер в Firebase
+        const roomRef = ref(database, `rooms/${roomId}`);
+        update(roomRef, { timer: gameTime });
+        
+        // Конец игры по времени
+        if (gameTime <= 0) {
+            endGame('Время вышло!', 'survivors');
+        }
+    }, 1000);
+}
+
+// Настройка управления
+function setupControls() {
     // Клавиатура
-    document.addEventListener('keydown', handleKeyDown);
-    document.addEventListener('keyup', handleKeyUp);
-    
-    // Мышь/тач
-    CANVAS.addEventListener('mousedown', handleMouseDown);
-    CANVAS.addEventListener('mouseup', handleMouseUp);
-    CANVAS.addEventListener('mousemove', handleMouseMove);
-    CANVAS.addEventListener('touchstart', handleTouchStart);
-    CANVAS.addEventListener('touchend', handleTouchEnd);
-    CANVAS.addEventListener('touchmove', handleTouchMove);
-    
-    // UI события
-    setupUIListeners();
-    
-    // События окна
-    window.addEventListener('blur', handleWindowBlur);
-    window.addEventListener('focus', handleWindowFocus);
-    window.addEventListener('beforeunload', handleBeforeUnload);
-    
-    // Ресайз
-    window.addEventListener('resize', handleResize);
-    
-    console.log('✅ Управление настроено');
-}
-
-function setupUIListeners() {
-    // Кнопки входа
-    document.getElementById('google-login').addEventListener('click', handleGoogleLogin);
-    document.getElementById('logout').addEventListener('click', handleLogout);
-    
-    // Главное меню
-    document.getElementById('quick-play').addEventListener('click', handleQuickPlay);
-    document.getElementById('create-game').addEventListener('click', handleCreateGame);
-    document.getElementById('join-game').addEventListener('click', handleJoinGame);
-    document.getElementById('settings-btn').addEventListener('click', showSettings);
-    document.getElementById('login-btn').addEventListener('click', showLogin);
-    
-    // Лобби
-    document.getElementById('start-game-btn').addEventListener('click', handleStartGame);
-    document.getElementById('leave-lobby').addEventListener('click', handleLeaveLobby);
-    document.getElementById('copy-code').addEventListener('click', handleCopyCode);
-    document.getElementById('ready-checkbox').addEventListener('change', handleReadyToggle);
-    
-    // Настройки комнаты
-    document.getElementById('round-time').addEventListener('input', handleRoundTimeChange);
-    document.getElementById('granny-increase').addEventListener('click', () => handleGrannyCountChange(1));
-    document.getElementById('granny-decrease').addEventListener('click', () => handleGrannyCountChange(-1));
-    document.getElementById('map-select').addEventListener('change', handleMapChange);
-    document.getElementById('voice-chat').addEventListener('change', handleVoiceChatToggle);
-    
-    // Игра
-    document.getElementById('pause-game').addEventListener('click', handlePauseGame);
-    document.getElementById('resume-game').addEventListener('click', handleResumeGame);
-    document.getElementById('leave-game').addEventListener('click', handleLeaveGame);
-    document.getElementById('open-chat').addEventListener('click', toggleGameChat);
-    
-    // Чат
-    document.getElementById('send-chat').addEventListener('click', sendLobbyChat);
-    document.getElementById('chat-input').addEventListener('keypress', (e) => {
-        if (e.key === 'Enter') sendLobbyChat();
-    });
-    
-    document.getElementById('send-game-chat').addEventListener('click', sendGameChat);
-    document.getElementById('game-chat-input').addEventListener('keypress', (e) => {
-        if (e.key === 'Enter') sendGameChat();
-    });
-    
-    // Мобильные кнопки
-    setupMobileControls();
-}
-
-function setupMobileControls() {
-    const joystickArea = document.getElementById('move-joystick');
-    const joystickKnob = joystickArea.querySelector('.joystick-knob');
-    
-    let joystickStartX = 0;
-    let joystickStartY = 0;
-    
-    joystickArea.addEventListener('touchstart', (e) => {
-        e.preventDefault();
-        const touch = e.touches[0];
-        const rect = joystickArea.getBoundingClientRect();
+    window.addEventListener('keydown', (e) => {
+        keys[e.key.toLowerCase()] = true;
         
-        MOBILE_CONTROLS.joystick.active = true;
-        joystickStartX = rect.left + rect.width / 2;
-        joystickStartY = rect.top + rect.height / 2;
-        
-        updateMobileJoystick(touch);
-    });
-    
-    document.addEventListener('touchmove', (e) => {
-        if (!MOBILE_CONTROLS.joystick.active) return;
-        e.preventDefault();
-        
-        const touch = e.touches[0];
-        updateMobileJoystick(touch);
-    });
-    
-    document.addEventListener('touchend', () => {
-        if (MOBILE_CONTROLS.joystick.active) {
-            MOBILE_CONTROLS.joystick.active = false;
-            MOBILE_CONTROLS.joystick.x = 0;
-            MOBILE_CONTROLS.joystick.y = 0;
-            joystickKnob.style.transform = 'translate(0, 0)';
+        // Действия
+        if (e.key === ' ' && !isHiding) {
+            tryHide();
+        }
+        if (e.key === 'e') {
+            interact();
         }
     });
     
-    // Кнопки действий
-    document.querySelectorAll('.action-btn').forEach(btn => {
+    window.addEventListener('keyup', (e) => {
+        keys[e.key.toLowerCase()] = false;
+    });
+    
+    // Мобильные кнопки
+    document.querySelectorAll('.d-btn').forEach(btn => {
         btn.addEventListener('touchstart', (e) => {
             e.preventDefault();
-            const action = e.currentTarget.dataset.action;
-            MOBILE_CONTROLS.buttons[action] = true;
-            
-            // Визуальная обратная связь
-            e.currentTarget.classList.add('active');
+            const key = btn.getAttribute('data-key');
+            keys[key] = true;
         });
         
         btn.addEventListener('touchend', (e) => {
             e.preventDefault();
-            const action = e.currentTarget.dataset.action;
-            MOBILE_CONTROLS.buttons[action] = false;
-            e.currentTarget.classList.remove('active');
+            const key = btn.getAttribute('data-key');
+            keys[key] = false;
         });
     });
-}
-
-function updateMobileJoystick(touch) {
-    const joystickKnob = document.querySelector('#move-joystick .joystick-knob');
-    const rect = document.getElementById('move-joystick').getBoundingClientRect();
     
-    const centerX = rect.left + rect.width / 2;
-    const centerY = rect.top + rect.height / 2;
-    
-    const deltaX = touch.clientX - centerX;
-    const deltaY = touch.clientY - centerY;
-    const distance = Math.sqrt(deltaX * deltaX + deltaY * deltaY);
-    const maxDistance = 50;
-    
-    if (distance > maxDistance) {
-        MOBILE_CONTROLS.joystick.x = (deltaX / distance) * maxDistance;
-        MOBILE_CONTROLS.joystick.y = (deltaY / distance) * maxDistance;
-    } else {
-        MOBILE_CONTROLS.joystick.x = deltaX;
-        MOBILE_CONTROLS.joystick.y = deltaY;
-    }
-    
-    // Обновление визуального джойстика
-    joystickKnob.style.transform = `translate(${MOBILE_CONTROLS.joystick.x}px, ${MOBILE_CONTROLS.joystick.y}px)`;
-}
-
-// ==============================================
-// ОБРАБОТЧИКИ СОБЫТИЙ
-// ==============================================
-function handleKeyDown(e) {
-    KEYS[e.code] = true;
-    
-    // Пауза на Escape
-    if (e.code === 'Escape' && CURRENT_SCREEN === SCREENS.GAME) {
-        togglePause();
-    }
-    
-    // Чат на Enter
-    if (e.code === 'Enter' && CURRENT_SCREEN === SCREENS.GAME) {
-        const chatInput = document.getElementById('game-chat-input');
-        if (document.activeElement !== chatInput) {
+    document.querySelectorAll('.action-btn').forEach(btn => {
+        btn.addEventListener('touchstart', (e) => {
             e.preventDefault();
-            toggleGameChat();
-        }
-    }
-    
-    // Спрятаться на E
-    if (e.code === 'KeyE' && CURRENT_SCREEN === SCREENS.GAME && LOCAL_PLAYER) {
-        handleHideAction();
-    }
-    
-    // Бежать на Shift
-    if (e.code === 'ShiftLeft' && CURRENT_SCREEN === SCREENS.GAME && LOCAL_PLAYER) {
-        LOCAL_PLAYER.isSprinting = true;
-    }
-}
-
-function handleKeyUp(e) {
-    KEYS[e.code] = false;
-    
-    if (e.code === 'ShiftLeft' && LOCAL_PLAYER) {
-        LOCAL_PLAYER.isSprinting = false;
-    }
-}
-
-function handleMouseDown(e) {
-    // Обработка кликов по игровым объектам
-    const rect = CANVAS.getBoundingClientRect();
-    const x = e.clientX - rect.left + CAMERA.x;
-    const y = e.clientY - rect.top + CAMERA.y;
-    
-    if (CURRENT_SCREEN === SCREENS.GAME) {
-        // Можно добавить взаимодействие с предметами
-    }
-}
-
-function handleMouseUp(e) {
-    // ...
-}
-
-function handleMouseMove(e) {
-    // Обновление позиции мыши для UI
-}
-
-function handleTouchStart(e) {
-    // Для тач-устройств
-}
-
-function handleTouchEnd(e) {
-    // ...
-}
-
-function handleTouchMove(e) {
-    // ...
-}
-
-function handleWindowBlur() {
-    if (CURRENT_SCREEN === SCREENS.GAME && GAME_STATE.status === 'playing') {
-        togglePause();
-    }
-}
-
-function handleWindowFocus() {
-    // ...
-}
-
-function handleBeforeUnload(e) {
-    if (CURRENT_SCREEN === SCREENS.GAME || CURRENT_SCREEN === SCREENS.LOBBY) {
-        e.preventDefault();
-        e.returnValue = 'Вы уверены, что хотите покинуть игру?';
-        return e.returnValue;
-    }
-}
-
-function handleResize() {
-    resizeCanvas();
-}
-
-// ==============================================
-// UI ОБРАБОТЧИКИ
-// ==============================================
-async function handleGoogleLogin() {
-    try {
-        showNotification('Вход через Google...', 'info');
-        const user = await loginWithGoogle();
-        showNotification(`Добро пожаловать, ${user.displayName}!`, 'success');
-        showMainMenu();
-    } catch (error) {
-        console.error('Ошибка входа:', error);
-        showNotification('Ошибка входа: ' + error.message, 'error');
-    }
-}
-
-function handleLogout() {
-    logout().then(() => {
-        showLogin();
-        showNotification('Вы вышли из системы', 'info');
-    });
-}
-
-function handleQuickPlay() {
-    showNotification('Поиск быстрой игры...', 'info');
-    
-    // Простая реализация - ищем первую доступную комнату
-    subscribeToRooms((rooms) => {
-        if (rooms.length > 0) {
-            const room = rooms[0];
-            joinRoom(room.id).then(() => {
-                CURRENT_ROOM = room.id;
-                showLobby(room);
-            });
-        } else {
-            // Если комнат нет - создаем новую
-            handleCreateGame();
-        }
-    });
-}
-
-async function handleCreateGame() {
-    try {
-        showNotification('Создание комнаты...', 'info');
-        const roomId = await createRoom();
-        CURRENT_ROOM = roomId;
-        
-        // Загружаем данные комнаты
-        subscribeToRoom(roomId, (roomData) => {
-            CURRENT_ROOM_DATA = roomData;
-            showLobby(roomData);
-        });
-        
-        showNotification('Комната создана!', 'success');
-    } catch (error) {
-        console.error('Ошибка создания комнаты:', error);
-        showNotification('Ошибка создания комнаты', 'error');
-    }
-}
-
-function handleJoinGame() {
-    const roomCode = prompt('Введите код комнаты (4 символа):').toUpperCase();
-    
-    if (roomCode && roomCode.length === 4) {
-        joinRoom(roomCode).then(success => {
-            if (success) {
-                CURRENT_ROOM = roomCode;
-                showNotification('Присоединение к комнате...', 'info');
-                
-                subscribeToRoom(roomCode, (roomData) => {
-                    if (roomData) {
-                        CURRENT_ROOM_DATA = roomData;
-                        showLobby(roomData);
-                        showNotification('Вы присоединились к комнате!', 'success');
-                    } else {
-                        showNotification('Комната не найдена', 'error');
-                        showMainMenu();
-                    }
-                });
+            const action = btn.getAttribute('data-action');
+            if (action === 'hide') {
+                tryHide();
+            } else if (action === 'interact') {
+                interact();
             }
         });
-    }
+    });
 }
 
-async function handleStartGame() {
-    if (!CURRENT_ROOM) return;
+// Попытка спрятаться
+function tryHide() {
+    const gridPos = pixelToGrid(player.x, player.y);
+    const room = getRoomAt(gridPos.x, gridPos.y);
     
-    try {
-        await startGame(CURRENT_ROOM);
-        showNotification('Игра начинается!', 'success');
-    } catch (error) {
-        console.error('Ошибка начала игры:', error);
-        showNotification('Ошибка начала игры', 'error');
-    }
-}
-
-function handleLeaveLobby() {
-    if (CURRENT_ROOM) {
-        leaveRoom();
-        CURRENT_ROOM = null;
-        CURRENT_ROOM_DATA = null;
-    }
+    if (!room) return;
     
-    showMainMenu();
-    showNotification('Вы покинули лобби', 'info');
-}
-
-function handleCopyCode() {
-    if (CURRENT_ROOM_DATA) {
-        navigator.clipboard.writeText(CURRENT_ROOM_DATA.id)
-            .then(() => showNotification('Код скопирован!', 'success'))
-            .catch(() => showNotification('Ошибка копирования', 'error'));
-    }
-}
-
-function handleReadyToggle(e) {
-    if (!CURRENT_ROOM || !currentUser) return;
-    
-    updatePlayerReady(CURRENT_ROOM, currentUser.uid, e.target.checked)
-        .catch(error => console.error('Ошибка обновления готовности:', error));
-}
-
-function handleRoundTimeChange(e) {
-    if (!CURRENT_ROOM || !CURRENT_ROOM_DATA) return;
-    
-    const newTime = parseInt(e.target.value);
-    document.getElementById('round-time-value').textContent = `${newTime} сек`;
-    
-    updateRoomSettings(CURRENT_ROOM, { roundTime: newTime })
-        .catch(error => console.error('Ошибка обновления времени:', error));
-}
-
-function handleGrannyCountChange(delta) {
-    if (!CURRENT_ROOM || !CURRENT_ROOM_DATA) return;
-    
-    const current = CURRENT_ROOM_DATA.settings?.grannyCount || 1;
-    const newCount = Math.max(1, Math.min(3, current + delta));
-    
-    document.getElementById('granny-count').value = newCount;
-    
-    updateRoomSettings(CURRENT_ROOM, { grannyCount: newCount })
-        .catch(error => console.error('Ошибка обновления количества гренни:', error));
-}
-
-function handleMapChange(e) {
-    if (!CURRENT_ROOM || !CURRENT_ROOM_DATA) return;
-    
-    updateRoomSettings(CURRENT_ROOM, { map: e.target.value })
-        .catch(error => console.error('Ошибка обновления карты:', error));
-}
-
-function handleVoiceChatToggle(e) {
-    if (!CURRENT_ROOM || !CURRENT_ROOM_DATA) return;
-    
-    updateRoomSettings(CURRENT_ROOM, { voiceChat: e.target.checked })
-        .catch(error => console.error('Ошибка обновления голосового чата:', error));
-}
-
-function handlePauseGame() {
-    togglePause();
-}
-
-function handleResumeGame() {
-    togglePause();
-}
-
-function handleLeaveGame() {
-    if (CURRENT_ROOM) {
-        leaveRoom();
-        CURRENT_ROOM = null;
-    }
-    
-    clearGame();
-    showMainMenu();
-    showNotification('Вы покинули игру', 'info');
-}
-
-function handleHideAction() {
-    if (!LOCAL_PLAYER || LOCAL_PLAYER.isGranny) return;
-    
-    // Проверяем рядом ли укрытие
-    const nearbySpot = GAME_STATE.hidingSpots.find(spot => {
-        if (spot.occupied) return false;
-        
-        const distance = Math.sqrt(
-            Math.pow(LOCAL_PLAYER.position.x - (spot.x + spot.width/2), 2) +
-            Math.pow(LOCAL_PLAYER.position.y - (spot.y + spot.height/2), 2)
+    const roomObjects = getObjectsInRoom(room.id);
+    const nearbyObject = roomObjects.find(obj => {
+        const dist = Math.sqrt(
+            Math.pow(obj.x - gridPos.x, 2) + 
+            Math.pow(obj.y - gridPos.y, 2)
         );
-        
-        return distance < GAME_CONFIG.HIDE_DISTANCE;
+        return dist < 2 && (obj.type === 'closet' || obj.type === 'bed' || obj.type === 'car');
     });
     
-    if (nearbySpot) {
-        const isHiding = !LOCAL_PLAYER.isHiding;
-        LOCAL_PLAYER.isHiding = isHiding;
-        nearbySpot.occupied = isHiding;
+    if (nearbyObject) {
+        isHiding = true;
+        hidingSpot = nearbyObject;
+        player.hidden = true;
         
-        if (isHiding) {
-            // Перемещаем игрока в центр укрытия
-            LOCAL_PLAYER.position.x = nearbySpot.x + nearbySpot.width/2;
-            LOCAL_PLAYER.position.y = nearbySpot.y + nearbySpot.height/2;
-            showNotification('Вы спрятались!', 'success');
-        } else {
-            showNotification('Вы вышли из укрытия', 'info');
-        }
+        broadcast({
+            type: 'playerAction',
+            playerId: playerId,
+            action: 'hide',
+            data: { object: nearbyObject.type }
+        });
         
-        // Синхронизируем с сервером
-        updatePlayerHiding(CURRENT_ROOM, LOCAL_PLAYER.id, isHiding, nearbySpot.id)
-            .catch(error => console.error('Ошибка обновления статуса укрытия:', error));
+        addLog(`${player.name} спрятался в ${getObjectName(nearbyObject.type)}!`);
     }
 }
 
-// ==============================================
-// FIREBASE СЛУШАТЕЛИ
-// ==============================================
-function setupFirebaseListeners() {
-    // Изменение состояния авторизации
-    onAuthStateChanged((user) => {
-        if (user) {
-            console.log('✅ Пользователь авторизован:', user.displayName);
-            updateUserUI(user);
-            
-            if (CURRENT_SCREEN === SCREENS.LOGIN) {
-                showMainMenu();
-            }
-        } else {
-            console.log('❌ Пользователь не авторизован');
-            showLogin();
-        }
-    });
-}
-
-// ==============================================
-// ИГРОВАЯ ЛОГИКА
-// ==============================================
-function startGameLogic(roomData) {
-    console.log('🎮 Начало игры!');
-    
-    GAME_STATE = {
-        status: 'playing',
-        timeLeft: roomData.settings?.roundTime || 120,
-        grannies: [],
-        runners: [],
-        hidingSpots: generateHidingSpots(),
-        items: generateItems(),
-        startTime: Date.now()
-    };
-    
-    // Создаем локального игрока
-    createLocalPlayer(roomData);
-    
-    // Подписываемся на обновления других игроков
-    subscribeToPlayers(CURRENT_ROOM, handlePlayersUpdate);
-    
-    // Запускаем таймер
-    startGameTimer();
-    
-    // Запускаем обновление позиций
-    startPositionUpdates();
-    
-    // Обновляем UI
-    updateGameUI();
-    
-    showNotification('Игра началась!', 'success');
-}
-
-function createLocalPlayer(roomData) {
-    const players = roomData.players || {};
-    const playerData = players[currentUser.uid];
-    
-    if (!playerData) {
-        console.error('Данные игрока не найдены');
+// Взаимодействие
+function interact() {
+    if (isHiding) {
+        // Выход из укрытия
+        isHiding = false;
+        hidingSpot = null;
+        player.hidden = false;
+        
+        broadcast({
+            type: 'playerAction',
+            playerId: playerId,
+            action: 'unhide'
+        });
+        
+        addLog(`${player.name} вышел из укрытия.`);
         return;
     }
     
-    LOCAL_PLAYER = {
-        id: currentUser.uid,
-        name: playerData.name,
-        position: playerData.position || { x: 100, y: 100 },
-        isGranny: playerData.isGranny || false,
-        isHiding: false,
-        isSprinting: false,
-        isReady: playerData.ready || false,
-        color: playerData.isGranny ? '#FF5252' : '#4CAF50',
-        speed: playerData.isGranny ? GAME_CONFIG.GRANNY_SPEED : GAME_CONFIG.PLAYER_SPEED
-    };
+    // Проверка дверей и объектов
+    const gridPos = pixelToGrid(player.x, player.y);
+    const room = getRoomAt(gridPos.x, gridPos.y);
     
-    // Обновляем отображение роли
-    updateRoleDisplay();
-}
-
-function generateHidingSpots() {
-    const spots = [];
-    const mapWidth = 1000;
-    const mapHeight = 800;
+    if (!room) return;
     
-    // Генерируем 10-15 укрытий
-    const spotCount = 10 + Math.floor(Math.random() * 6);
+    const roomObjects = getObjectsInRoom(room.id);
+    const nearbyObject = roomObjects.find(obj => {
+        const dist = Math.sqrt(
+            Math.pow(obj.x - gridPos.x, 2) + 
+            Math.pow(obj.y - gridPos.y, 2)
+        );
+        return dist < 2;
+    });
     
-    for (let i = 0; i < spotCount; i++) {
-        spots.push({
-            id: `spot_${i}`,
-            x: 100 + Math.random() * (mapWidth - 200),
-            y: 100 + Math.random() * (mapHeight - 200),
-            width: GAME_CONFIG.CABINET_SIZE.width,
-            height: GAME_CONFIG.CABINET_SIZE.height,
-            type: 'cabinet',
-            occupied: false,
-            occupiedBy: null
-        });
+    if (nearbyObject) {
+        handleObjectInteraction(nearbyObject);
     }
-    
-    return spots;
 }
 
-function generateItems() {
-    const items = [];
-    const itemTypes = [
-        { name: 'ключ', color: '#FFD700', effect: 'open_doors' },
-        { name: 'фонарик', color: '#FF9800', effect: 'light' },
-        { name: 'аптечка', color: '#F44336', effect: 'heal' },
-        { name: 'ловушка', color: '#9C27B0', effect: 'trap' }
-    ];
-    
-    for (let i = 0; i < 8; i++) {
-        const type = itemTypes[Math.floor(Math.random() * itemTypes.length)];
-        items.push({
-            id: `item_${i}`,
-            x: 150 + Math.random() * 700,
-            y: 150 + Math.random() * 500,
-            type: type.name,
-            color: type.color,
-            effect: type.effect,
-            collected: false
-        });
-    }
-    
-    return items;
-}
-
-function handlePlayersUpdate(playersData) {
-    if (!playersData) return;
-    
-    PLAYERS = playersData;
-    
-    // Обновляем список игроков в UI
-    updatePlayersListUI();
-    
-    // Обновляем игровое состояние
-    updateGameStateFromPlayers();
-}
-
-function updateGameStateFromPlayers() {
-    GAME_STATE.grannies = [];
-    GAME_STATE.runners = [];
-    
-    Object.values(PLAYERS).forEach(player => {
-        if (player.isGranny) {
-            GAME_STATE.grannies.push(player);
-        } else {
-            GAME_STATE.runners.push(player);
-        }
-        
-        // Обновляем занятость укрытий
-        if (player.isHiding && player.hidingSpotId) {
-            const spot = GAME_STATE.hidingSpots.find(s => s.id === player.hidingSpotId);
-            if (spot) {
-                spot.occupied = true;
-                spot.occupiedBy = player.id;
+// Обработка взаимодействия с объектом
+function handleObjectInteraction(obj) {
+    switch (obj.type) {
+        case 'door':
+            if (obj.leadsTo === 'outside' && !obj.locked) {
+                // ПОБЕДА ВЫЖИВШИХ
+                if (!player.isGranny) {
+                    endGame('Выжившие сбежали!', 'survivors');
+                }
+            } else if (obj.locked) {
+                addLog('Дверь заперта! Нужен ключ.');
             }
-        }
-    });
-    
-    // Обновляем счетчики в UI
-    updateGameCounters();
-}
-
-function updatePlayerMovement() {
-    if (!LOCAL_PLAYER || LOCAL_PLAYER.isHiding) return;
-    
-    let moveX = 0;
-    let moveY = 0;
-    
-    // Клавиатура
-    if (KEYS['KeyW'] || KEYS['ArrowUp']) moveY -= 1;
-    if (KEYS['KeyS'] || KEYS['ArrowDown']) moveY += 1;
-    if (KEYS['KeyA'] || KEYS['ArrowLeft']) moveX -= 1;
-    if (KEYS['KeyD'] || KEYS['ArrowRight']) moveX += 1;
-    
-    // Мобильный джойстик
-    if (MOBILE_CONTROLS.joystick.active) {
-        moveX += MOBILE_CONTROLS.joystick.x / 50;
-        moveY += MOBILE_CONTROLS.joystick.y / 50;
-    }
-    
-    // Нормализация вектора движения
-    if (moveX !== 0 || moveY !== 0) {
-        const length = Math.sqrt(moveX * moveX + moveY * moveY);
-        moveX /= length;
-        moveY /= length;
-    }
-    
-    // Учет спринта
-    const speed = LOCAL_PLAYER.isSprinting ? LOCAL_PLAYER.speed * 1.5 : LOCAL_PLAYER.speed;
-    
-    // Вычисление новой позиции
-    const newX = LOCAL_PLAYER.position.x + moveX * speed;
-    const newY = LOCAL_PLAYER.position.y + moveY * speed;
-    
-    // Проверка коллизий с границами карты
-    const mapWidth = 1000;
-    const mapHeight = 800;
-    
-    if (newX >= 0 && newX <= mapWidth && newY >= 0 && newY <= mapHeight) {
-        LOCAL_PLAYER.position.x = newX;
-        LOCAL_PLAYER.position.y = newY;
-    }
-    
-    // Обновляем камеру
-    updateCamera();
-}
-
-function updateCamera() {
-    if (!LOCAL_PLAYER) return;
-    
-    // Камера следует за игроком
-    CAMERA.x = LOCAL_PLAYER.position.x - CAMERA.width / 2;
-    CAMERA.y = LOCAL_PLAYER.position.y - CAMERA.height / 2;
-    
-    // Ограничение камеры границами карты
-    const mapWidth = 1000;
-    const mapHeight = 800;
-    
-    CAMERA.x = Math.max(0, Math.min(mapWidth - CAMERA.width, CAMERA.x));
-    CAMERA.y = Math.max(0, Math.min(mapHeight - CAMERA.height, CAMERA.y));
-}
-
-function checkCatch() {
-    if (!LOCAL_PLAYER || !LOCAL_PLAYER.isGranny) return;
-    
-    Object.values(PLAYERS).forEach(player => {
-        if (player.id === LOCAL_PLAYER.id || player.isGranny || player.isHiding) return;
-        
-        const distance = Math.sqrt(
-            Math.pow(LOCAL_PLAYER.position.x - player.position.x, 2) +
-            Math.pow(LOCAL_PLAYER.position.y - player.position.y, 2)
-        );
-        
-        if (distance < GAME_CONFIG.CATCH_DISTANCE) {
-            // Поймали игрока!
-            showNotification(`Вы поймали ${player.name}!`, 'warning');
-            // Здесь нужно отправить событие на сервер
-        }
-    });
-}
-
-function checkItemPickup() {
-    if (!LOCAL_PLAYER || LOCAL_PLAYER.isHiding) return;
-    
-    GAME_STATE.items.forEach(item => {
-        if (item.collected) return;
-        
-        const distance = Math.sqrt(
-            Math.pow(LOCAL_PLAYER.position.x - item.x, 2) +
-            Math.pow(LOCAL_PLAYER.position.y - item.y, 2)
-        );
-        
-        if (distance < 20) {
-            item.collected = true;
-            showNotification(`Вы подобрали ${item.type}!`, 'success');
-            // Здесь можно добавить эффект предмета
-        }
-    });
-}
-
-// ==============================================
-// ТАЙМЕРЫ
-// ==============================================
-function startGameTimer() {
-    clearInterval(GAME_TIMER_INTERVAL);
-    
-    GAME_TIMER_INTERVAL = setInterval(() => {
-        GAME_STATE.timeLeft--;
-        
-        // Обновляем таймер в UI
-        updateGameTimerUI();
-        
-        // Проверка конца игры
-        if (GAME_STATE.timeLeft <= 0) {
-            endGame('timeout');
-        }
-        
-        // Проверка условий победы
-        checkWinConditions();
-        
-    }, 1000);
-}
-
-function startPositionUpdates() {
-    clearInterval(POSITION_UPDATE_INTERVAL);
-    
-    POSITION_UPDATE_INTERVAL = setInterval(() => {
-        if (LOCAL_PLAYER && CURRENT_ROOM && !LOCAL_PLAYER.isHiding) {
-            updatePlayerPosition(CURRENT_ROOM, LOCAL_PLAYER.position)
-                .catch(error => console.error('Ошибка обновления позиции:', error));
-        }
-    }, 100); // Обновляем позицию каждые 100мс
-}
-
-function checkWinConditions() {
-    // Простая логика победы
-    const aliveRunners = Object.values(PLAYERS).filter(p => !p.isGranny && !p.caught).length;
-    
-    if (aliveRunners === 0) {
-        endGame('granny_win');
-    }
-}
-
-function endGame(reason) {
-    clearInterval(GAME_TIMER_INTERVAL);
-    clearInterval(POSITION_UPDATE_INTERVAL);
-    
-    GAME_STATE.status = 'ended';
-    
-    let message = '';
-    switch(reason) {
-        case 'timeout':
-            message = 'Время вышло! Бегуны победили!';
             break;
-        case 'granny_win':
-            message = 'Гренни поймали всех!';
+            
+        case 'trap':
+            if (!obj.active && !player.isGranny) {
+                addLog(`${player.name} наступил на ловушку!`);
+                broadcast({
+                    type: 'gameEvent',
+                    event: 'trapTriggered',
+                    data: { playerId: playerId, x: obj.x, y: obj.y }
+                });
+            }
             break;
-        default:
-            message = 'Игра окончена!';
     }
-    
-    showNotification(message, 'info');
-    
-    // Показываем экран результатов
-    setTimeout(() => {
-        showEndGameScreen(reason);
-    }, 2000);
 }
 
-// ==============================================
-// РЕНДЕРИНГ
-// ==============================================
+// Основной игровой цикл
 function gameLoop() {
-    // Очистка экрана
-    CTX.clearRect(0, 0, CANVAS.width, CANVAS.height);
+    if (!isGameActive) return;
     
-    // Рендер в зависимости от экрана
-    switch(CURRENT_SCREEN) {
-        case SCREENS.LOGIN:
-            renderLoginScreen();
-            break;
-        case SCREENS.MENU:
-            renderMenuScreen();
-            break;
-        case SCREENS.LOBBY:
-            renderLobbyScreen();
-            break;
-        case SCREENS.GAME:
-            renderGameScreen();
-            break;
-        case SCREENS.ENDGAME:
-            renderEndGameScreen();
-            break;
-        case SCREENS.SETTINGS:
-            renderSettingsScreen();
-            break;
+    // Очистка канваса
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    
+    // Отрисовка карты
+    drawMap();
+    
+    // Обработка движения
+    if (!player.caught && (!isHiding || player.isGranny)) {
+        handleMovement();
     }
     
-    // Обновление логики игры
-    if (CURRENT_SCREEN === SCREENS.GAME && GAME_STATE.status === 'playing') {
-        updateGameLogic();
+    // Отрисовка объектов
+    drawObjects();
+    
+    // Отрисовка игроков
+    drawPlayers();
+    
+    // Отрисовка текущего игрока
+    drawPlayer();
+    
+    // Синхронизация состояния
+    syncPlayerState();
+    
+    // Проверка столкновений (для Granny)
+    if (player.isGranny) {
+        checkCatch();
     }
     
     requestAnimationFrame(gameLoop);
 }
 
-function renderGameScreen() {
-    // Рендер карты
-    renderMap();
+// Отрисовка карты
+function drawMap() {
+    // Фон
+    ctx.fillStyle = '#1a1a1a';
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
     
-    // Рендер предметов
-    renderItems();
-    
-    // Рендер укрытий
-    renderHidingSpots();
-    
-    // Рендер других игроков
-    renderOtherPlayers();
-    
-    // Рендер локального игрока
-    renderLocalPlayer();
-    
-    // Рендер UI поверх игры
-    renderGameUI();
-}
-
-function renderMap() {
-    // Фон (пол)
-    const pattern = CTX.createPattern(ASSETS.floor, 'repeat');
-    CTX.fillStyle = pattern;
-    CTX.fillRect(-CAMERA.x, -CAMERA.y, 1000, 800);
-    
-    // Стены
-    CTX.fillStyle = '#8D6E63';
-    CTX.fillRect(50 - CAMERA.x, 50 - CAMERA.y, 900, 700);
-    CTX.fillStyle = '#5D4037';
-    CTX.fillRect(60 - CAMERA.x, 60 - CAMERA.y, 880, 680);
-    
-    // Мебель
-    const furniturePositions = [
-        { x: 200, y: 150 },
-        { x: 600, y: 150 },
-        { x: 200, y: 500 },
-        { x: 600, y: 500 }
-    ];
-    
-    furniturePositions.forEach(pos => {
-        CTX.drawImage(
-            ASSETS.furniture,
-            pos.x - CAMERA.x,
-            pos.y - CAMERA.y,
-            100, 100
-        );
+    // Комнаты
+    MAP.rooms.forEach(room => {
+        if (room.floor !== currentFloor) return;
+        
+        const pixel = gridToPixel(room.x, room.y);
+        const size = { w: room.w * MAP.gridSize, h: room.h * MAP.gridSize };
+        
+        // Пол
+        ctx.fillStyle = room.id === 'entrance' ? '#2a2a2a' : '#333';
+        ctx.fillRect(pixel.x, pixel.y, size.w, size.h);
+        
+        // Стены
+        ctx.strokeStyle = '#555';
+        ctx.lineWidth = 2;
+        ctx.strokeRect(pixel.x, pixel.y, size.w, size.h);
+        
+        // Название комнаты
+        ctx.fillStyle = '#888';
+        ctx.font = '12px Arial';
+        ctx.fillText(room.name, pixel.x + 5, pixel.y + 15);
     });
 }
 
-function renderItems() {
-    GAME_STATE.items.forEach(item => {
-        if (item.collected) return;
+// Отрисовка объектов
+function drawObjects() {
+    MAP.objects.forEach(obj => {
+        const room = MAP.rooms.find(r => r.id === obj.room);
+        if (!room || room.floor !== currentFloor) return;
         
-        CTX.fillStyle = item.color;
-        CTX.beginPath();
-        CTX.arc(
-            item.x - CAMERA.x,
-            item.y - CAMERA.y,
-            8, 0, Math.PI * 2
-        );
-        CTX.fill();
+        const pixel = gridToPixel(obj.x, obj.y);
         
-        // Обводка
-        CTX.strokeStyle = '#FFFFFF';
-        CTX.lineWidth = 2;
-        CTX.stroke();
-        
-        // Текст
-        CTX.fillStyle = '#FFFFFF';
-        CTX.font = '10px Arial';
-        CTX.textAlign = 'center';
-        CTX.fillText(
-            item.type[0].toUpperCase(),
-            item.x - CAMERA.x,
-            item.y - CAMERA.y + 3
-        );
-    });
-}
-
-function renderHidingSpots() {
-    GAME_STATE.hidingSpots.forEach(spot => {
-        if (spot.occupied) {
-            CTX.globalAlpha = 0.7;
-        }
-        
-        CTX.drawImage(
-            ASSETS.cabinet,
-            spot.x - CAMERA.x,
-            spot.y - CAMERA.y,
-            spot.width,
-            spot.height
-        );
-        
-        CTX.globalAlpha = 1.0;
-        
-        // Индикатор занятости
-        if (spot.occupied) {
-            CTX.fillStyle = '#FF5252';
-            CTX.font = '12px Arial';
-            CTX.textAlign = 'center';
-            CTX.fillText(
-                'ЗАНЯТО',
-                spot.x - CAMERA.x + spot.width/2,
-                spot.y - CAMERA.y - 10
-            );
+        switch (obj.type) {
+            case 'door':
+                ctx.fillStyle = obj.locked ? '#8B4513' : '#654321';
+                ctx.fillRect(pixel.x, pixel.y, MAP.gridSize, MAP.gridSize);
+                ctx.fillStyle = '#fff';
+                ctx.fillText('🚪', pixel.x + 10, pixel.y + 25);
+                break;
+                
+            case 'closet':
+                ctx.fillStyle = '#5D4037';
+                ctx.fillRect(pixel.x, pixel.y, MAP.gridSize, MAP.gridSize);
+                ctx.fillStyle = '#fff';
+                ctx.fillText('👕', pixel.x + 10, pixel.y + 25);
+                break;
+                
+            case 'bed':
+                ctx.fillStyle = '#6A1B9A';
+                ctx.fillRect(pixel.x, pixel.y, MAP.gridSize * 2, MAP.gridSize);
+                ctx.fillStyle = '#fff';
+                ctx.fillText('🛏️', pixel.x + 15, pixel.y + 25);
+                break;
+                
+            case 'trap':
+                if (obj.active) {
+                    ctx.fillStyle = '#ff0000';
+                    ctx.beginPath();
+                    ctx.arc(pixel.x + MAP.gridSize/2, pixel.y + MAP.gridSize/2, 15, 0, Math.PI * 2);
+                    ctx.fill();
+                }
+                break;
         }
     });
 }
 
-function renderOtherPlayers() {
-    Object.values(PLAYERS).forEach(player => {
-        if (player.id === LOCAL_PLAYER?.id) return;
+// Отрисовка других игроков
+function drawPlayers() {
+    Object.values(players).forEach(p => {
+        if (p.id === playerId || p.floor !== currentFloor || p.caught) return;
         
-        const sprite = player.isGranny ? ASSETS.granny : ASSETS.player;
-        const size = player.isGranny ? GAME_CONFIG.GRANNY_SIZE : GAME_CONFIG.PLAYER_SIZE;
+        const pixel = gridToPixel(p.x, p.y);
         
-        // Рендер игрока
-        CTX.drawImage(
-            sprite,
-            player.position.x - size/2 - CAMERA.x,
-            player.position.y - size/2 - CAMERA.y,
-            size * 2,
-            size * 2
-        );
+        // Игрок
+        ctx.fillStyle = p.isGranny ? '#ff0000' : '#00a8ff';
+        ctx.beginPath();
+        ctx.arc(pixel.x + MAP.gridSize/2, pixel.y + MAP.gridSize/2, 15, 0, Math.PI * 2);
+        ctx.fill();
         
-        // Имя игрока
-        CTX.fillStyle = '#FFFFFF';
-        CTX.font = '12px Arial';
-        CTX.textAlign = 'center';
-        CTX.fillText(
-            player.name,
-            player.position.x - CAMERA.x,
-            player.position.y - size - CAMERA.y - 5
-        );
+        // Имя
+        ctx.fillStyle = '#fff';
+        ctx.font = '10px Arial';
+        ctx.fillText(p.name, pixel.x - 10, pixel.y - 5);
         
         // Индикатор укрытия
-        if (player.isHiding) {
-            CTX.strokeStyle = '#2196F3';
-            CTX.lineWidth = 2;
-            CTX.beginPath();
-            CTX.arc(
-                player.position.x - CAMERA.x,
-                player.position.y - CAMERA.y,
-                size + 5,
-                0, Math.PI * 2
-            );
-            CTX.stroke();
-        }
-        
-        // Индикатор пойманности
-        if (player.caught) {
-            CTX.fillStyle = 'rgba(0, 0, 0, 0.5)';
-            CTX.beginPath();
-            CTX.arc(
-                player.position.x - CAMERA.x,
-                player.position.y - CAMERA.y,
-                size,
-                0, Math.PI * 2
-            );
-            CTX.fill();
-            
-            CTX.fillStyle = '#FFFFFF';
-            CTX.fillText(
-                'ПОЙМАН',
-                player.position.x - CAMERA.x,
-                player.position.y - CAMERA.y + 5
-            );
+        if (p.hidden) {
+            ctx.fillStyle = 'rgba(0, 0, 0, 0.5)';
+            ctx.fillRect(pixel.x - 5, pixel.y - 5, 50, 50);
         }
     });
 }
 
-function renderLocalPlayer() {
-    if (!LOCAL_PLAYER) return;
+// Отрисовка текущего игрока
+function drawPlayer() {
+    const pixel = { x: player.x, y: player.y };
     
-    const sprite = LOCAL_PLAYER.isGranny ? ASSETS.granny : ASSETS.player;
-    const size = LOCAL_PLAYER.isGranny ? GAME_CONFIG.GRANNY_SIZE : GAME_CONFIG.PLAYER_SIZE;
+    // Тень
+    ctx.fillStyle = 'rgba(0, 0, 0, 0.3)';
+    ctx.beginPath();
+    ctx.ellipse(pixel.x + 15, pixel.y + 40, 12, 5, 0, 0, Math.PI * 2);
+    ctx.fill();
     
-    // Рендер игрока
-    CTX.drawImage(
-        sprite,
-        LOCAL_PLAYER.position.x - size/2 - CAMERA.x,
-        LOCAL_PLAYER.position.y - size/2 - CAMERA.y,
-        size * 2,
-        size * 2
-    );
-    
-    // Обводка для локального игрока
-    CTX.strokeStyle = '#FFFFFF';
-    CTX.lineWidth = 3;
-    CTX.beginPath();
-    CTX.arc(
-        LOCAL_PLAYER.position.x - CAMERA.x,
-        LOCAL_PLAYER.position.y - CAMERA.y,
-        size + 2,
-        0, Math.PI * 2
-    );
-    CTX.stroke();
+    // Игрок
+    ctx.fillStyle = player.color;
+    ctx.beginPath();
+    ctx.arc(pixel.x + 15, pixel.y + 15, 15, 0, Math.PI * 2);
+    ctx.fill();
     
     // Индикатор укрытия
-    if (LOCAL_PLAYER.isHiding) {
-        CTX.fillStyle = 'rgba(33, 150, 243, 0.3)';
-        CTX.beginPath();
-        CTX.arc(
-            LOCAL_PLAYER.position.x - CAMERA.x,
-            LOCAL_PLAYER.position.y - CAMERA.y,
-            size + 10,
-            0, Math.PI * 2
-        );
-        CTX.fill();
+    if (player.hidden) {
+        ctx.fillStyle = 'rgba(0, 0, 0, 0.7)';
+        ctx.fillRect(pixel.x - 10, pixel.y - 10, 50, 50);
+        ctx.fillStyle = '#fff';
+        ctx.fillText('Спрятан', pixel.x, pixel.y - 15);
     }
     
-    // Индикатор спринта
-    if (LOCAL_PLAYER.isSprinting) {
-        CTX.fillStyle = '#FF9800';
-        CTX.font = '10px Arial';
-        CTX.textAlign = 'center';
-        CTX.fillText(
-            'СПРИНТ',
-            LOCAL_PLAYER.position.x - CAMERA.x,
-            LOCAL_PLAYER.position.y + size + CAMERA.y + 15
-        );
+    // Индикатор этажа
+    ctx.fillStyle = '#fff';
+    ctx.font = '10px Arial';
+    ctx.fillText(`Этаж ${currentFloor}`, 10, 20);
+}
+
+// Обработка движения
+function handleMovement() {
+    const speed = player.isGranny ? 2 : 3;
+    let moved = false;
+    
+    if (keys['w'] || keys['arrowup']) {
+        player.y -= speed;
+        moved = true;
     }
-}
-
-function updateGameLogic() {
-    updatePlayerMovement();
-    checkCatch();
-    checkItemPickup();
-}
-
-// ==============================================
-// UI ФУНКЦИИ
-// ==============================================
-function showScreen(screenName) {
-    // Скрываем все экраны
-    document.querySelectorAll('.screen').forEach(screen => {
-        screen.classList.add('hidden');
-    });
+    if (keys['s'] || keys['arrowdown']) {
+        player.y += speed;
+        moved = true;
+    }
+    if (keys['a'] || keys['arrowleft']) {
+        player.x -= speed;
+        moved = true;
+    }
+    if (keys['d'] || keys['arrowright']) {
+        player.x += speed;
+        moved = true;
+    }
     
-    // Показываем нужный экран
-    document.getElementById(`${screenName}-screen`).classList.remove('hidden');
-    CURRENT_SCREEN = screenName;
+    // Границы карты
+    player.x = Math.max(0, Math.min(canvas.width - player.width, player.x));
+    player.y = Math.max(0, Math.min(canvas.height - player.height, player.y));
     
-    // Обновляем UI для экрана
-    updateScreenUI(screenName);
-}
-
-function showLogin() {
-    showScreen(SCREENS.LOGIN);
-}
-
-function showMainMenu() {
-    showScreen(SCREENS.MENU);
-    updateUserUI(currentUser);
-}
-
-function showLobby(roomData) {
-    showScreen(SCREENS.LOBBY);
-    updateLobbyUI(roomData);
-}
-
-function showGame() {
-    showScreen(SCREENS.GAME);
-}
-
-function showEndGameScreen(reason) {
-    showScreen(SCREENS.ENDGAME);
-    updateEndGameUI(reason);
-}
-
-function showSettings() {
-    showScreen(SCREENS.SETTINGS);
-}
-
-function updateUserUI(user) {
-    if (!user) return;
-    
-    const profileAvatar = document.getElementById('profile-avatar');
-    const profileName = document.getElementById('profile-name');
-    const userName = document.getElementById('user-name');
-    const userAvatar = document.getElementById('user-avatar');
-    
-    if (profileAvatar) profileAvatar.src = user.photoURL || '';
-    if (profileName) profileName.textContent = user.displayName;
-    if (userName) userName.textContent = user.displayName;
-    if (userAvatar) userAvatar.src = user.photoURL || '';
-}
-
-function updateLobbyUI(roomData) {
-    if (!roomData) return;
-    
-    // Код комнаты
-    document.getElementById('room-name').textContent = `Комната #${roomData.id}`;
-    document.getElementById('room-code').textContent = roomData.id;
-    
-    // Настройки
-    const settings = roomData.settings || {};
-    document.getElementById('round-time').value = settings.roundTime || 120;
-    document.getElementById('round-time-value').textContent = `${settings.roundTime || 120} сек`;
-    document.getElementById('granny-count').value = settings.grannyCount || 1;
-    document.getElementById('map-select').value = settings.map || 'house';
-    document.getElementById('voice-chat').checked = settings.voiceChat || false;
-    
-    // Список игроков
-    updatePlayersListUI(roomData.players);
-    
-    // Кнопка начала игры (только для хоста)
-    const startBtn = document.getElementById('start-game-btn');
-    const isHost = roomData.host === currentUser.uid;
-    startBtn.disabled = !isHost;
-    
-    if (isHost) {
-        startBtn.classList.add('enabled');
-    } else {
-        startBtn.classList.remove('enabled');
+    // Проверка смены этажа (лестницы)
+    if (moved) {
+        checkFloorChange();
     }
 }
 
-function updatePlayersListUI(players) {
-    const container = document.getElementById('players-list');
-    if (!container) return;
+// Проверка смены этажа
+function checkFloorChange() {
+    const gridPos = pixelToGrid(player.x, player.y);
     
-    container.innerHTML = '';
-    
-    if (!players) {
-        container.innerHTML = '<p>Нет игроков</p>';
-        return;
-    }
-    
-    Object.values(players).forEach(player => {
-        const playerEl = document.createElement('div');
-        playerEl.className = 'player-card';
-        playerEl.innerHTML = `
-            <div class="player-avatar">
-                <img src="${player.avatar || ''}" alt="${player.name}" onerror="this.src='data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><circle cx=%2250%22 cy=%2250%22 r=%2240%22 fill=%22%234CAF50%22/></svg>'">
-                ${player.isGranny ? '<div class="host-badge"><i class="fas fa-ghost"></i></div>' : ''}
-                ${player.ready ? '<div class="ready-badge"><i class="fas fa-check"></i></div>' : ''}
-            </div>
-            <div class="player-info">
-                <div class="player-name">${player.name}</div>
-                <div class="player-status">
-                    ${player.isGranny ? '<span class="role-badge granny">👵 Гренни</span>' : '<span class="role-badge runner">🏃 Бегун</span>'}
-                </div>
-            </div>
-        `;
-        container.appendChild(playerEl);
-    });
-    
-    // Обновляем счетчик
-    document.getElementById('players-count').textContent = Object.keys(players).length;
-}
-
-function updateGameUI() {
-    updateRoleDisplay();
-    updateGameTimerUI();
-    updateGameCounters();
-}
-
-function updateRoleDisplay() {
-    const roleDisplay = document.getElementById('role-display');
-    if (!roleDisplay || !LOCAL_PLAYER) return;
-    
-    roleDisplay.innerHTML = LOCAL_PLAYER.isGranny ? 
-        '<i class="fas fa-ghost"></i> Вы: 👵 Гренни' : 
-        '<i class="fas fa-running"></i> Вы: 🏃 Бегун';
-    
-    roleDisplay.className = `role-display ${LOCAL_PLAYER.isGranny ? 'role-granny' : 'role-runner'}`;
-}
-
-function updateGameTimerUI() {
-    const timerElement = document.getElementById('game-timer');
-    if (!timerElement) return;
-    
-    const minutes = Math.floor(GAME_STATE.timeLeft / 60);
-    const seconds = GAME_STATE.timeLeft % 60;
-    timerElement.textContent = `${minutes.toString().padStart(2, '0')}:${seconds.toString().padStart(2, '0')}`;
-    
-    // Изменение цвета при малом времени
-    if (GAME_STATE.timeLeft <= 30) {
-        timerElement.style.color = '#FF5252';
-        timerElement.style.animation = GAME_STATE.timeLeft <= 10 ? 'pulse 0.5s infinite' : 'none';
-    } else {
-        timerElement.style.color = '#FFD700';
-        timerElement.style.animation = 'none';
-    }
-}
-
-function updateGameCounters() {
-    const runnersCount = document.getElementById('runners-count');
-    const granniesCount = document.getElementById('grannies-count');
-    const hiddenCount = document.getElementById('hidden-count');
-    
-    if (runnersCount) {
-        const runners = Object.values(PLAYERS).filter(p => !p.isGranny && !p.caught).length;
-        runnersCount.textContent = runners;
-    }
-    
-    if (granniesCount) {
-        const grannies = Object.values(PLAYERS).filter(p => p.isGranny).length;
-        granniesCount.textContent = grannies;
-    }
-    
-    if (hiddenCount) {
-        const hidden = Object.values(PLAYERS).filter(p => p.isHiding).length;
-        hiddenCount.textContent = hidden;
-    }
-}
-
-function updateEndGameUI(reason) {
-    const container = document.querySelector('.endgame-container');
-    if (!container) return;
-    
-    let title = '';
-    let message = '';
-    
-    switch(reason) {
-        case 'timeout':
-            title = '🏃 Бегуны победили!';
-            message = 'Время вышло, вы пережили гренни!';
-            break;
-        case 'granny_win':
-            title = '👵 Гренни победили!';
-            message = 'Все бегуны были пойманы!';
-            break;
-        default:
-            title = 'Игра окончена!';
-            message = 'Спасибо за игру!';
-    }
-    
-    const isWinner = (reason === 'timeout' && !LOCAL_PLAYER?.isGranny) || 
-                    (reason === 'granny_win' && LOCAL_PLAYER?.isGranny);
-    
-    container.innerHTML = `
-        <div class="endgame-content ${isWinner ? 'winner' : 'loser'}">
-            <h1>${title}</h1>
-            <p class="endgame-message">${message}</p>
+    MAP.objects.forEach(obj => {
+        if (obj.type === 'stairs' && obj.x === gridPos.x && obj.y === gridPos.y) {
+            currentFloor = currentFloor === 1 ? 2 : 1;
+            addLog(`Перешел на ${currentFloor} этаж`);
             
-            <div class="game-stats-summary">
-                <h3>Статистика игры:</h3>
-                <div class="stats-grid">
-                    <div class="stat-item">
-                        <span class="stat-label">Длительность:</span>
-                        <span class="stat-value">${Math.floor((Date.now() - GAME_STATE.startTime) / 1000)} сек</span>
-                    </div>
-                    <div class="stat-item">
-                        <span class="stat-label">Бегунов осталось:</span>
-                        <span class="stat-value">${Object.values(PLAYERS).filter(p => !p.isGranny && !p.caught).length}</span>
-                    </div>
-                    <div class="stat-item">
-                        <span class="stat-label">Поймано:</span>
-                        <span class="stat-value">${Object.values(PLAYERS).filter(p => !p.isGranny && p.caught).length}</span>
-                    </div>
-                    <div class="stat-item">
-                        <span class="stat-label">Спрятано предметов:</span>
-                        <span class="stat-value">${GAME_STATE.items.filter(i => i.collected).length}</span>
-                    </div>
-                </div>
-            </div>
-            
-            <div class="endgame-buttons">
-                <button id="play-again" class="btn primary">
-                    <i class="fas fa-redo"></i>
-                    Играть снова
-                </button>
-                <button id="back-to-lobby" class="btn">
-                    <i class="fas fa-home"></i>
-                    В лобби
-                </button>
-                <button id="back-to-menu" class="btn">
-                    <i class="fas fa-sign-out-alt"></i>
-                    В главное меню
-                </button>
-            </div>
-        </div>
-    `;
-    
-    // Добавляем обработчики кнопок
-    document.getElementById('play-again').addEventListener('click', handlePlayAgain);
-    document.getElementById('back-to-lobby').addEventListener('click', () => showLobby(CURRENT_ROOM_DATA));
-    document.getElementById('back-to-menu').addEventListener('click', handleBackToMenu);
+            // Перемещаем на соответствующие координаты
+            if (currentFloor === 2) {
+                player.x = 8 * MAP.gridSize;
+                player.y = 2 * MAP.gridSize;
+            } else {
+                player.x = 8 * MAP.gridSize;
+                player.y = 11 * MAP.gridSize;
+            }
+        }
+    });
 }
 
-function handlePlayAgain() {
-    if (CURRENT_ROOM) {
-        // Перезапускаем игру
-        startGameLogic(CURRENT_ROOM_DATA);
-        showGame();
-    }
-}
-
-function handleBackToMenu() {
-    clearGame();
-    showMainMenu();
-}
-
-function clearGame() {
-    clearInterval(GAME_TIMER_INTERVAL);
-    clearInterval(POSITION_UPDATE_INTERVAL);
-    
-    LOCAL_PLAYER = null;
-    PLAYERS = {};
-    GAME_STATE = {
-        status: 'waiting',
-        timeLeft: 120,
-        grannies: [],
-        runners: [],
-        hidingSpots: [],
-        items: [],
-        startTime: null
-    };
-}
-
-function togglePause() {
-    if (GAME_STATE.status === 'playing') {
-        GAME_STATE.status = 'paused';
-        document.getElementById('pause-menu').classList.remove('hidden');
-        showNotification('Игра на паузе', 'info');
-    } else if (GAME_STATE.status === 'paused') {
-        GAME_STATE.status = 'playing';
-        document.getElementById('pause-menu').classList.add('hidden');
-        showNotification('Игра продолжается', 'success');
-    }
-}
-
-function toggleGameChat() {
-    const chat = document.getElementById('game-chat');
-    chat.classList.toggle('hidden');
-    
-    if (!chat.classList.contains('hidden')) {
-        document.getElementById('game-chat-input').focus();
-    }
-}
-
-function sendLobbyChat() {
-    const input = document.getElementById('chat-input');
-    const message = input.value.trim();
-    
-    if (message && CURRENT_ROOM) {
-        sendChatMessage(CURRENT_ROOM, message, currentUser)
-            .then(() => {
-                input.value = '';
-            })
-            .catch(error => console.error('Ошибка отправки сообщения:', error));
-    }
-}
-
-function sendGameChat() {
-    const input = document.getElementById('game-chat-input');
-    const message = input.value.trim();
-    
-    if (message && CURRENT_ROOM) {
-        sendChatMessage(CURRENT_ROOM, message, currentUser)
-            .then(() => {
-                input.value = '';
-            })
-            .catch(error => console.error('Ошибка отправки сообщения:', error));
-    }
-}
-
-function showNotification(message, type = 'info') {
-    const notification = document.createElement('div');
-    notification.className = `notification ${type}`;
-    notification.innerHTML = `
-        <div class="notification-content">
-            <i class="fas fa-${getNotificationIcon(type)}"></i>
-            <span>${message}</span>
-        </div>
-    `;
-    
-    const container = document.getElementById('notifications');
-    if (container) {
-        container.appendChild(notification);
+// Проверка поимки (для Granny)
+function checkCatch() {
+    Object.values(players).forEach(p => {
+        if (p.isGranny || p.caught || p.hidden || p.floor !== currentFloor) return;
         
-        // Автоматическое удаление
-        setTimeout(() => {
-            notification.classList.add('fade-out');
-            setTimeout(() => {
-                if (notification.parentNode) {
-                    notification.parentNode.removeChild(notification);
-                }
-            }, 300);
-        }, 3000);
-    }
+        const dist = Math.sqrt(
+            Math.pow(player.x - p.x, 2) + 
+            Math.pow(player.y - p.y, 2)
+        );
+        
+        if (dist < 30) {
+            // ПОЙМАН!
+            p.caught = true;
+            
+            broadcast({
+                type: 'gameEvent',
+                event: 'playerCaught',
+                data: { caughtPlayerId: p.id, by: playerId }
+            });
+            
+            addLog(`${p.name} пойман Granny!`);
+            
+            // Проверка конца игры
+            checkGameEnd();
+        }
+    });
 }
 
-function getNotificationIcon(type) {
-    switch(type) {
-        case 'success': return 'check-circle';
-        case 'error': return 'exclamation-circle';
-        case 'warning': return 'exclamation-triangle';
-        default: return 'info-circle';
-    }
-}
-
-function checkDeviceType() {
-    const isMobile = /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent);
+// Синхронизация состояния игрока
+function syncPlayerState() {
+    if (Date.now() - player.lastUpdate < 100) return;
     
-    if (isMobile) {
-        document.body.classList.add('mobile');
-    } else {
-        document.body.classList.add('desktop');
-    }
+    player.lastUpdate = Date.now();
+    
+    // Отправка состояния другим игрокам
+    broadcast({
+        type: 'playerState',
+        playerId: playerId,
+        data: {
+            x: player.x,
+            y: player.y,
+            floor: currentFloor,
+            hidden: player.hidden,
+            caught: player.caught
+        }
+    });
+    
+    // Обновление в Firebase
+    updatePlayerData({
+        x: player.x,
+        y: player.y,
+        floor: currentFloor,
+        hidden: player.hidden,
+        caught: player.caught,
+        lastSeen: Date.now()
+    });
 }
 
-function checkAuthState() {
-    if (currentUser) {
-        showMainMenu();
-    } else {
-        showLogin();
+// Обновление состояния другого игрока
+window.gameState = {
+    updatePlayer: function(id, data) {
+        if (!players[id]) {
+            players[id] = { id, name: `Игрок_${id.substring(0, 4)}`, isGranny: false };
+        }
+        Object.assign(players[id], data);
+    },
+    
+    handlePlayerAction: function(id, action, data) {
+        if (action === 'hide') {
+            addLog(`${players[id]?.name || 'Игрок'} спрятался.`);
+        } else if (action === 'unhide') {
+            addLog(`${players[id]?.name || 'Игрок'} вышел из укрытия.`);
+        }
+    },
+    
+    handleGameEvent: function(event, data) {
+        if (event === 'playerCaught') {
+            if (players[data.caughtPlayerId]) {
+                players[data.caughtPlayerId].caught = true;
+            }
+            addLog(`${players[data.caughtPlayerId]?.name || 'Игрок'} пойман!`);
+            checkGameEnd();
+        }
+    },
+    
+    getPlayerData: function() {
+        return {
+            x: player.x,
+            y: player.y,
+            floor: currentFloor,
+            hidden: player.hidden
+        };
     }
-}
-
-// ==============================================
-// ЗАПУСК ИГРЫ
-// ==============================================
-// Инициализация при полной загрузке страницы
-window.addEventListener('DOMContentLoaded', initGame);
-
-// Экспорт для отладки в консоли
-window.game = {
-    showScreen,
-    showNotification,
-    startGameLogic,
-    updatePlayerMovement,
-    checkCatch,
-    endGame,
-    getState: () => ({
-        CURRENT_SCREEN,
-        CURRENT_ROOM,
-        LOCAL_PLAYER,
-        PLAYERS,
-        GAME_STATE,
-        KEYS
-    })
 };
 
-console.log('🎮 Granny Multiplayer загружен!');
+// Проверка конца игры
+function checkGameEnd() {
+    const survivors = Object.values(players).filter(p => !p.isGranny && !p.caught);
+    
+    if (survivors.length === 0) {
+        endGame('Granny победила! Все пойманы.', 'granny');
+    }
+}
+
+// Конец игры
+function endGame(message, winner) {
+    isGameActive = false;
+    clearInterval(gameTimer);
+    
+    const roomRef = ref(database, `rooms/${roomId}`);
+    update(roomRef, {
+        gameOver: true,
+        gameResult: message,
+        winner: winner
+    });
+    
+    // Показываем результат
+    setTimeout(() => {
+        document.getElementById('resultTitle').textContent = 
+            winner === 'granny' ? 'Granny победила!' : 'Выжившие победили!';
+        document.getElementById('resultText').textContent = message;
+        document.getElementById('resultModal').style.display = 'flex';
+    }, 1000);
+}
+
+// Добавление сообщения в лог
+function addLog(message) {
+    const log = document.getElementById('gameLog');
+    const p = document.createElement('p');
+    p.textContent = `[${new Date().toLocaleTimeString().slice(0,5)}] ${message}`;
+    log.appendChild(p);
+    log.scrollTop = log.scrollHeight;
+}
+
+// Вспомогательная функция
+function getObjectName(type) {
+    const names = {
+        closet: 'шкаф',
+        bed: 'кровать',
+        car: 'машина',
+        sofa: 'диван',
+        refrigerator: 'холодильник'
+    };
+    return names[type] || 'объект';
+}
