@@ -49,7 +49,6 @@ function joinRoom() {
             return;
         }
         
-        // Добавляем игрока в комнату
         const updates = {};
         updates[`players/${playerId}`] = {
             name: 'Игрок_' + playerId.substring(0, 4),
@@ -82,21 +81,17 @@ function setupRoomListeners(roomId) {
         
         document.getElementById('playerCount').textContent = playerCount;
         
-        // Активируем кнопку начала если минимум 2 игрока
         document.getElementById('startBtn').disabled = playerCount < 2;
         document.getElementById('startBtn').textContent = 
             playerCount < 2 ? 'Начать игру (ждем игроков...)' : 'Начать игру!';
         
-        // Если игра началась - переходим к игровому экрану
         if (data.status === 'playing') {
-            // Определяем кто бабка
             for (const [id, player] of Object.entries(players)) {
                 if (player.isGranny) {
                     isGranny = (id === playerId);
                     break;
                 }
             }
-            // Переходим на игровой экран
             window.location.href = `game.html?room=${roomId}&player=${playerId}&granny=${isGranny}`;
         }
     });
@@ -112,11 +107,9 @@ function startGame() {
         const players = snapshot.val();
         if (!players) return;
         
-        // Выбираем случайного игрока в бабку
         const playerIds = Object.keys(players);
         const grannyId = playerIds[Math.floor(Math.random() * playerIds.length)];
         
-        // Обновляем статус всех игроков
         const updates = {};
         playerIds.forEach(id => {
             updates[`players/${id}/isGranny`] = (id === grannyId);
@@ -130,7 +123,6 @@ function startGame() {
     }, { onlyOnce: true });
 }
 
-// Экспортируем функции для глобального использования
 window.createRoom = createRoom;
 window.joinRoom = joinRoom;
 window.startGame = startGame;
