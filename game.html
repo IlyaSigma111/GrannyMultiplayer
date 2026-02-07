@@ -1,0 +1,66 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Granny 2D - Игра</title>
+    <link rel="stylesheet" href="css/style.css">
+    <link rel="stylesheet" href="css/game.css">
+    <script type="module" src="js/firebase.js"></script>
+    <script src="https://unpkg.com/peerjs@1.4.7/dist/peerjs.min.js"></script>
+</head>
+<body>
+    <div class="game-container">
+        <div class="game-header">
+            <div class="timer">
+                <span id="timer">120</span> сек
+            </div>
+            <div class="role">
+                Вы: <span id="roleText">Выживший</span>
+            </div>
+            <div class="players-online">
+                Игроков: <span id="playersCount">1</span>
+            </div>
+        </div>
+        
+        <canvas id="gameCanvas"></canvas>
+        
+        <div class="controls">
+            <!-- Десктопные клавиши (скрыты на мобилках) -->
+            <div class="desktop-controls">
+                <p>WASD - двигаться, SPACE - спрятаться, E - взаимодействовать</p>
+            </div>
+            
+            <!-- Мобильные кнопки (появятся на телефонах) -->
+            <div class="mobile-controls">
+                <div class="d-pad">
+                    <button class="d-btn up" data-key="w">↑</button>
+                    <button class="d-btn left" data-key="a">←</button>
+                    <button class="d-btn down" data-key="s">↓</button>
+                    <button class="d-btn right" data-key="d">→</button>
+                </div>
+                <div class="action-buttons">
+                    <button class="action-btn hide-btn" data-action="hide">Прятаться</button>
+                    <button class="action-btn interact-btn" data-action="interact">Действие</button>
+                </div>
+            </div>
+        </div>
+        
+        <div class="game-log" id="gameLog">
+            <p>Добро пожаловать в дом Granny!</p>
+        </div>
+    </div>
+    
+    <!-- Модальное окно победы/поражения -->
+    <div id="resultModal" class="modal">
+        <div class="modal-content">
+            <h2 id="resultTitle">Игра окончена!</h2>
+            <p id="resultText"></p>
+            <button onclick="window.location.href='index.html'">В лобби</button>
+        </div>
+    </div>
+    
+    <script type="module" src="js/game.js"></script>
+    <script src="js/mobile-controls.js"></script>
+</body>
+</html>
