@@ -4,9 +4,9 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Granny 2D - Игра</title>
-    <link rel="stylesheet" href="css/style.css">
-    <link rel="stylesheet" href="css/game.css">
-    <script type="module" src="js/firebase.js"></script>
+    <link rel="stylesheet" href="style.css">
+    <link rel="stylesheet" href="game.css">
+    <script type="module" src="firebase.js"></script>
     <script src="https://unpkg.com/peerjs@1.4.7/dist/peerjs.min.js"></script>
 </head>
 <body>
@@ -26,12 +26,10 @@
         <canvas id="gameCanvas"></canvas>
         
         <div class="controls">
-            <!-- Десктопные клавиши (скрыты на мобилках) -->
             <div class="desktop-controls">
                 <p>WASD - двигаться, SPACE - спрятаться, E - взаимодействовать</p>
             </div>
             
-            <!-- Мобильные кнопки (появятся на телефонах) -->
             <div class="mobile-controls">
                 <div class="d-pad">
                     <button class="d-btn up" data-key="w">↑</button>
@@ -51,7 +49,6 @@
         </div>
     </div>
     
-    <!-- Модальное окно победы/поражения -->
     <div id="resultModal" class="modal">
         <div class="modal-content">
             <h2 id="resultTitle">Игра окончена!</h2>
@@ -60,7 +57,7 @@
         </div>
     </div>
     
-    <script type="module" src="js/game.js"></script>
-    <script src="js/mobile-controls.js"></script>
+    <script type="module" src="game.js"></script>
+    <script src="mobile-controls.js"></script>
 </body>
 </html>
