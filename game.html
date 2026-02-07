@@ -6,6 +6,48 @@
     <title>Granny 2D - Игра</title>
     <link rel="stylesheet" href="style.css">
     <link rel="stylesheet" href="game.css">
+    <style>
+        /* Дополнительные исправления */
+        body, html {
+            margin: 0;
+            padding: 0;
+            overflow: hidden;
+            height: 100%;
+            background: #000;
+        }
+        
+        .game-container {
+            padding: 5px !important;
+            max-width: none !important;
+            height: 100vh;
+            display: flex;
+            flex-direction: column;
+        }
+        
+        #gameCanvas {
+            flex-grow: 1;
+            width: 100% !important;
+            height: auto !important;
+            max-height: 70vh;
+            border: 2px solid #444;
+        }
+        
+        .game-header {
+            margin-bottom: 5px;
+            padding: 8px 15px;
+        }
+        
+        .controls {
+            margin-top: 5px;
+            padding: 5px;
+        }
+        
+        .game-log {
+            margin-top: 5px;
+            max-height: 80px;
+            padding: 8px;
+        }
+    </style>
 </head>
 <body>
     <div class="game-container">
@@ -19,13 +61,14 @@
             <div class="players-online">
                 Игроков: <span id="playersCount">1</span>
             </div>
+            <button onclick="window.location.href='index.html'" style="padding:5px 10px; font-size:12px;">Выйти</button>
         </div>
         
         <canvas id="gameCanvas" width="800" height="600"></canvas>
         
         <div class="controls">
             <div class="desktop-controls">
-                <p>WASD - двигаться, SPACE - спрятаться, E - взаимодействовать</p>
+                <p>WASD/Стрелки - двигаться, ПРОБЕЛ - спрятаться, E - взаимодействовать</p>
             </div>
         </div>
         
@@ -33,173 +76,539 @@
             <p id="debugText">Загрузка игры...</p>
         </div>
     </div>
-    
+
     <script>
-        // === УПРОЩЕННАЯ ВЕРСИЯ ИГРЫ ДЛЯ ТЕСТА ===
-        console.log('=== ИГРА ЗАПУСКАЕТСЯ ===');
+        // ===== ОСНОВНОЙ ИГРОВОЙ ДВИЖОК =====
+        console.log('=== Granny 2D Multiplayer ===');
         
-        // Параметры из URL
+        // Получаем параметры
         const urlParams = new URLSearchParams(window.location.search);
         const roomId = urlParams.get('room');
         const playerId = urlParams.get('player');
         const isGranny = urlParams.get('granny') === 'true';
         
-        console.log('Параметры:', { roomId, playerId, isGranny });
+        console.log('Игрок:', playerId, 'Granny:', isGranny, 'Комната:', roomId);
         
-        // Обновляем интерфейс
-        document.getElementById('roleText').textContent = isGranny ? 'Granny 👵' : 'Выживший 🏃';
-        document.getElementById('roleText').style.color = isGranny ? '#ff4757' : '#00ff88';
-        document.getElementById('debugText').textContent = `Комната: ${roomId}, Игрок: ${playerId}`;
+        // Элементы интерфейса
+        const roleElement = document.getElementById('roleText');
+        const timerElement = document.getElementById('timer');
+        const playersElement = document.getElementById('playersCount');
+        const debugElement = document.getElementById('debugText');
+        const logElement = document.getElementById('gameLog');
         
-        // Инициализация игры
+        // Настройка интерфейса
+        roleElement.textContent = isGranny ? 'Granny 👵' : 'Выживший 🏃';
+        roleElement.style.color = isGranny ? '#ff4757' : '#00ff88';
+        
+        // Канвас и контекст
         const canvas = document.getElementById('gameCanvas');
         const ctx = canvas.getContext('2d');
         
-        // Простая карта
+        // Увеличиваем размер карты
         const MAP = {
-            gridSize: 40,
-            width: 20,
-            height: 15
+            gridSize: 50, // УВЕЛИЧИЛИ С 40 ДО 50
+            width: 25,    // УВЕЛИЧИЛИ КАРТУ
+            height: 20,
+            
+            rooms: [
+                { id: 'entrance', name: 'Прихожая', x: 10, y: 15, w: 7, h: 5, floor: 1 },
+                { id: 'livingroom', name: 'Гостиная', x: 5, y: 10, w: 10, h: 5, floor: 1 },
+                { id: 'kitchen', name: 'Кухня', x: 15, y: 12, w: 8, h: 7, floor: 1 },
+                { id: 'garage', name: 'Гараж', x: 2, y: 15, w: 7, h: 5, floor: 1 },
+                { id: 'bedroom', name: 'Спальня', x: 5, y: 3, w: 10, h: 7, floor: 2 },
+                { id: 'bathroom', name: 'Ванная', x: 16, y: 3, w: 7, h: 7, floor: 2 }
+            ],
+            
+            objects: [
+                // Двери
+                { x: 13, y: 17, type: 'door', locked: false, room: 'entrance' },
+                { x: 18, y: 15, type: 'door', locked: true, room: 'kitchen' },
+                { x: 5, y: 17, type: 'door', locked: false, room: 'garage' },
+                
+                // Укрытия
+                { x: 12, y: 16, type: 'closet', room: 'entrance' },
+                { x: 17, y: 14, type: 'refrigerator', room: 'kitchen' },
+                { x: 6, y: 16, type: 'car', room: 'garage' },
+                { x: 8, y: 6, type: 'bed', room: 'bedroom' },
+                { x: 18, y: 6, type: 'bathtub', room: 'bathroom' },
+                
+                // Лестница
+                { x: 13, y: 16, type: 'stairs', room: 'entrance' }
+            ]
         };
         
-        // Игрок
+        // Устанавливаем размер канваса по карте
+        canvas.width = MAP.width * MAP.gridSize;
+        canvas.height = MAP.height * MAP.gridSize;
+        
+        console.log('Размер канваса:', canvas.width, 'x', canvas.height);
+        
+        // Текущий игрок
         const player = {
-            x: 5 * MAP.gridSize,
-            y: 12 * MAP.gridSize,
+            id: playerId,
+            x: 12 * MAP.gridSize,
+            y: 16 * MAP.gridSize,
+            size: 20, // УВЕЛИЧИЛИ РАЗМЕР
             color: isGranny ? '#ff0000' : '#00a8ff',
-            size: 15
+            name: isGranny ? 'Granny' : 'Player_' + playerId.substring(0, 4),
+            isGranny: isGranny,
+            floor: 1,
+            hidden: false,
+            speed: isGranny ? 2.5 : 3.5, // Granny медленнее
+            lastUpdate: Date.now()
         };
         
-        // Другие игроки (тестовые)
-        const testPlayers = [
-            { x: 10 * MAP.gridSize, y: 8 * MAP.gridSize, color: '#00a8ff', size: 15 },
-            { x: 15 * MAP.gridSize, y: 5 * MAP.gridSize, color: '#00a8ff', size: 15 }
-        ];
+        // Другие игроки
+        let otherPlayers = {};
         
         // Управление
         const keys = {};
-        window.addEventListener('keydown', (e) => keys[e.key.toLowerCase()] = true);
-        window.addEventListener('keyup', (e) => keys[e.key.toLowerCase()] = false);
+        let isMoving = false;
         
-        // Таймер
+        window.addEventListener('keydown', (e) => {
+            const key = e.key.toLowerCase();
+            keys[key] = true;
+            isMoving = true;
+            
+            // Действия
+            if (key === ' ' || key === 'spacebar') {
+                toggleHide();
+            }
+            if (key === 'e') {
+                interact();
+            }
+        });
+        
+        window.addEventListener('keyup', (e) => {
+            keys[e.key.toLowerCase()] = false;
+            isMoving = Object.values(keys).some(v => v);
+        });
+        
+        // Таймер игры
         let gameTime = 120;
-        const timerElement = document.getElementById('timer');
+        let gameActive = true;
         
-        const timer = setInterval(() => {
+        const gameTimer = setInterval(() => {
+            if (!gameActive) return;
+            
             gameTime--;
             timerElement.textContent = gameTime;
             
             if (gameTime <= 0) {
-                clearInterval(timer);
-                alert('Время вышло!');
+                endGame(isGranny ? 'Выжившие победили! Время вышло.' : 'Granny победила! Время вышло.');
             }
         }, 1000);
+        
+        // Firebase
+        let firebaseLoaded = false;
+        let database = null;
+        
+        // Загружаем Firebase
+        import('./firebase.js').then(module => {
+            console.log('Firebase загружен');
+            firebaseLoaded = true;
+            database = module.database;
+            
+            // Слушаем изменения в комнате
+            const { ref, onValue, update } = module;
+            const roomRef = ref(database, 'rooms/' + roomId);
+            
+            onValue(roomRef, (snapshot) => {
+                const data = snapshot.val();
+                if (!data) {
+                    endGame('Комната удалена!');
+                    return;
+                }
+                
+                // Обновляем счетчик игроков
+                if (data.players) {
+                    const playerCount = Object.keys(data.players).length;
+                    playersElement.textContent = playerCount;
+                    
+                    // Получаем других игроков
+                    otherPlayers = {};
+                    Object.entries(data.players).forEach(([id, playerData]) => {
+                        if (id !== playerId && playerData.x !== undefined) {
+                            otherPlayers[id] = {
+                                x: playerData.x,
+                                y: playerData.y,
+                                floor: playerData.floor || 1,
+                                hidden: playerData.hidden || false,
+                                caught: playerData.caught || false,
+                                isGranny: playerData.isGranny || false,
+                                name: playerData.name || 'Игрок'
+                            };
+                        }
+                    });
+                }
+                
+                // Конец игры
+                if (data.gameOver) {
+                    endGame(data.gameResult || 'Игра окончена');
+                }
+                
+                // Обновляем таймер из Firebase
+                if (data.timer !== undefined) {
+                    gameTime = data.timer;
+                }
+            });
+            
+            // Функция обновления позиции игрока
+            window.updatePlayerPosition = () => {
+                if (!firebaseLoaded) return;
+                
+                const updates = {
+                    x: player.x,
+                    y: player.y,
+                    floor: player.floor,
+                    hidden: player.hidden,
+                    caught: false,
+                    lastUpdate: Date.now(),
+                    name: player.name
+                };
+                
+                const playerRef = ref(database, `rooms/${roomId}/players/${playerId}`);
+                update(playerRef, updates);
+            };
+            
+        }).catch(err => {
+            console.error('Ошибка Firebase:', err);
+            debugElement.textContent = 'Ошибка подключения к серверу';
+        });
+        
+        // Функции игры
+        function toggleHide() {
+            if (player.hidden) {
+                // Выход из укрытия
+                player.hidden = false;
+                addLog('Вы вышли из укрытия');
+            } else {
+                // Проверяем, можно ли спрятаться
+                const canHide = checkNearHideSpot();
+                if (canHide) {
+                    player.hidden = true;
+                    addLog('Вы спрятались!');
+                }
+            }
+        }
+        
+        function checkNearHideSpot() {
+            // Простая проверка - рядом с объектами укрытия
+            for (const obj of MAP.objects) {
+                if (obj.type === 'closet' || obj.type === 'bed' || obj.type === 'car') {
+                    const dist = Math.sqrt(
+                        Math.pow((player.x / MAP.gridSize) - obj.x, 2) + 
+                        Math.pow((player.y / MAP.gridSize) - obj.y, 2)
+                    );
+                    if (dist < 2) return true;
+                }
+            }
+            return false;
+        }
+        
+        function interact() {
+            if (player.hidden) {
+                toggleHide();
+                return;
+            }
+            
+            // Проверяем дверь
+            for (const obj of MAP.objects.filter(o => o.type === 'door')) {
+                const dist = Math.sqrt(
+                    Math.pow((player.x / MAP.gridSize) - obj.x, 2) + 
+                    Math.pow((player.y / MAP.gridSize) - obj.y, 2)
+                );
+                
+                if (dist < 1.5) {
+                    if (obj.locked) {
+                        addLog('Дверь заперта!');
+                    } else if (obj.room === 'entrance' && !player.isGranny) {
+                        endGame('Выжившие сбежали! Победа!', 'survivors');
+                    }
+                }
+            }
+        }
+        
+        // Отрисовка
+        function drawMap() {
+            // Фон
+            ctx.fillStyle = '#0a0a0a';
+            ctx.fillRect(0, 0, canvas.width, canvas.height);
+            
+            // Комнаты
+            MAP.rooms.forEach(room => {
+                if (room.floor !== player.floor) return;
+                
+                const x = room.x * MAP.gridSize;
+                const y = room.y * MAP.gridSize;
+                const w = room.w * MAP.gridSize;
+                const h = room.h * MAP.gridSize;
+                
+                // Пол
+                ctx.fillStyle = room.id === 'entrance' ? '#1a1a1a' : '#222';
+                ctx.fillRect(x, y, w, h);
+                
+                // Стены
+                ctx.strokeStyle = '#444';
+                ctx.lineWidth = 3;
+                ctx.strokeRect(x, y, w, h);
+                
+                // Название
+                ctx.fillStyle = '#888';
+                ctx.font = '14px Arial';
+                ctx.fillText(room.name, x + 10, y + 20);
+            });
+            
+            // Объекты
+            MAP.objects.forEach(obj => {
+                const x = obj.x * MAP.gridSize;
+                const y = obj.y * MAP.gridSize;
+                
+                switch (obj.type) {
+                    case 'door':
+                        ctx.fillStyle = obj.locked ? '#8B0000' : '#8B4513';
+                        ctx.fillRect(x, y, MAP.gridSize, MAP.gridSize);
+                        ctx.fillStyle = '#fff';
+                        ctx.font = '20px Arial';
+                        ctx.fillText('🚪', x + 15, y + 35);
+                        break;
+                        
+                    case 'closet':
+                        ctx.fillStyle = '#5D4037';
+                        ctx.fillRect(x, y, MAP.gridSize, MAP.gridSize);
+                        ctx.fillStyle = '#fff';
+                        ctx.font = '20px Arial';
+                        ctx.fillText('🚪', x + 15, y + 35);
+                        break;
+                        
+                    case 'stairs':
+                        ctx.fillStyle = '#555';
+                        ctx.fillRect(x, y, MAP.gridSize, MAP.gridSize);
+                        ctx.fillStyle = '#fff';
+                        ctx.font = '20px Arial';
+                        ctx.fillText('🪜', x + 15, y + 35);
+                        break;
+                }
+            });
+        }
+        
+        function drawPlayers() {
+            // Другие игроки
+            Object.values(otherPlayers).forEach(p => {
+                if (p.floor !== player.floor || p.caught) return;
+                
+                const x = p.x;
+                const y = p.y;
+                
+                // Тень
+                ctx.fillStyle = 'rgba(0,0,0,0.3)';
+                ctx.beginPath();
+                ctx.ellipse(x + 15, y + 35, 15, 6, 0, 0, Math.PI * 2);
+                ctx.fill();
+                
+                // Игрок
+                ctx.fillStyle = p.isGranny ? '#ff0000' : '#00a8ff';
+                ctx.beginPath();
+                ctx.arc(x + 15, y + 15, p.hidden ? 8 : 15, 0, Math.PI * 2);
+                ctx.fill();
+                
+                // Имя
+                ctx.fillStyle = '#fff';
+                ctx.font = '12px Arial';
+                ctx.fillText(p.name, x - 10, y - 5);
+                
+                // Спрятанный индикатор
+                if (p.hidden) {
+                    ctx.fillStyle = 'rgba(0,0,0,0.5)';
+                    ctx.fillRect(x - 10, y - 10, 50, 50);
+                }
+            });
+            
+            // Текущий игрок
+            const x = player.x;
+            const y = player.y;
+            
+            // Тень
+            ctx.fillStyle = 'rgba(0,0,0,0.3)';
+            ctx.beginPath();
+            ctx.ellipse(x + 15, y + 35, 15, 6, 0, 0, Math.PI * 2);
+            ctx.fill();
+            
+            // Игрок
+            ctx.fillStyle = player.color;
+            ctx.beginPath();
+            ctx.arc(x + 15, y + 15, player.hidden ? 8 : player.size, 0, Math.PI * 2);
+            ctx.fill();
+            
+            // Имя
+            ctx.fillStyle = '#fff';
+            ctx.font = 'bold 14px Arial';
+            ctx.fillText(player.name + ' (Вы)', x - 15, y - 10);
+            
+            // Спрятанный индикатор
+            if (player.hidden) {
+                ctx.fillStyle = 'rgba(0,0,0,0.7)';
+                ctx.fillRect(x - 15, y - 15, 60, 60);
+                ctx.fillStyle = '#fff';
+                ctx.font = '12px Arial';
+                ctx.fillText('Спрятан', x, y - 20);
+            }
+        }
+        
+        function drawHUD() {
+            // Этаж
+            ctx.fillStyle = '#fff';
+            ctx.font = '16px Arial';
+            ctx.fillText(`Этаж ${player.floor}`, 20, 30);
+            
+            // Отладка
+            ctx.font = '12px Arial';
+            ctx.fillText(`X: ${Math.round(player.x)}, Y: ${Math.round(player.y)}`, 20, 50);
+            ctx.fillText(`Скорость: ${player.speed}`, 20, 65);
+            ctx.fillText(`Спрятан: ${player.hidden ? 'Да' : 'Нет'}`, 20, 80);
+        }
         
         // Игровой цикл
         function gameLoop() {
             // Очистка
-            ctx.fillStyle = '#1a1a1a';
-            ctx.fillRect(0, 0, canvas.width, canvas.height);
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
             
-            // Сетка
-            ctx.strokeStyle = '#333';
-            ctx.lineWidth = 1;
-            for (let x = 0; x <= MAP.width; x++) {
-                ctx.beginPath();
-                ctx.moveTo(x * MAP.gridSize, 0);
-                ctx.lineTo(x * MAP.gridSize, canvas.height);
-                ctx.stroke();
-            }
-            for (let y = 0; y <= MAP.height; y++) {
-                ctx.beginPath();
-                ctx.moveTo(0, y * MAP.gridSize);
-                ctx.lineTo(canvas.width, y * MAP.gridSize);
-                ctx.stroke();
+            // Обработка движения
+            if (!player.hidden) {
+                handleMovement();
             }
             
-            // Дом (простой)
-            ctx.fillStyle = '#2a2a2a';
-            ctx.fillRect(5 * MAP.gridSize, 5 * MAP.gridSize, 10 * MAP.gridSize, 8 * MAP.gridSize);
+            // Отрисовка
+            drawMap();
+            drawPlayers();
+            drawHUD();
             
-            // Дверь
-            ctx.fillStyle = '#8B4513';
-            ctx.fillRect(10 * MAP.gridSize, 12 * MAP.gridSize, 2 * MAP.gridSize, MAP.gridSize);
+            // Проверка для Granny
+            if (player.isGranny) {
+                checkCatch();
+            }
             
-            // Движение игрока
-            const speed = 3;
-            if (keys['w'] || keys['arrowup']) player.y -= speed;
-            if (keys['s'] || keys['arrowdown']) player.y += speed;
-            if (keys['a'] || keys['arrowleft']) player.x -= speed;
-            if (keys['d'] || keys['arrowright']) player.x += speed;
-            
-            // Границы
-            player.x = Math.max(0, Math.min(canvas.width - player.size * 2, player.x));
-            player.y = Math.max(0, Math.min(canvas.height - player.size * 2, player.y));
-            
-            // Рисуем других игроков
-            testPlayers.forEach(p => {
-                ctx.fillStyle = p.color;
-                ctx.beginPath();
-                ctx.arc(p.x + player.size, p.y + player.size, p.size, 0, Math.PI * 2);
-                ctx.fill();
-                
-                // Имя
-                ctx.fillStyle = 'white';
-                ctx.font = '12px Arial';
-                ctx.fillText('Игрок', p.x - 10, p.y - 10);
-            });
-            
-            // Рисуем текущего игрока
-            ctx.fillStyle = player.color;
-            ctx.beginPath();
-            ctx.arc(player.x + player.size, player.y + player.size, player.size, 0, Math.PI * 2);
-            ctx.fill();
-            
-            // Имя текущего игрока
-            ctx.fillStyle = 'white';
-            ctx.font = '12px Arial';
-            ctx.fillText(isGranny ? 'Granny' : 'Вы', player.x - 10, player.y - 10);
-            
-            // Инфо
-            ctx.fillStyle = 'white';
-            ctx.font = '14px Arial';
-            ctx.fillText(`FPS: ${Math.round(1000/16)}`, 10, 20);
-            ctx.fillText(`X: ${Math.round(player.x)}, Y: ${Math.round(player.y)}`, 10, 40);
+            // Синхронизация
+            syncPlayer();
             
             requestAnimationFrame(gameLoop);
         }
         
-        // Запускаем игру
-        gameLoop();
-        console.log('Игра запущена!');
+        function handleMovement() {
+            let moved = false;
+            
+            // WASD + Стрелки
+            if (keys['w'] || keys['arrowup']) {
+                player.y -= player.speed;
+                moved = true;
+            }
+            if (keys['s'] || keys['arrowdown']) {
+                player.y += player.speed;
+                moved = true;
+            }
+            if (keys['a'] || keys['arrowleft']) {
+                player.x -= player.speed;
+                moved = true;
+            }
+            if (keys['d'] || keys['arrowright']) {
+                player.x += player.speed;
+                moved = true;
+            }
+            
+            // Границы карты
+            player.x = Math.max(0, Math.min(canvas.width - player.size * 2, player.x));
+            player.y = Math.max(0, Math.min(canvas.height - player.size * 2, player.y));
+            
+            // Смена этажа
+            if (moved) {
+                checkStairs();
+            }
+        }
         
-        // Тест Firebase
-        setTimeout(() => {
-            console.log('Тест Firebase...');
-            import('./firebase.js').then(module => {
-                console.log('Firebase загружен успешно');
-                
-                // Проверяем комнату
-                const db = module.database;
-                const ref = module.ref;
-                const onValue = module.onValue;
-                
-                const roomRef = ref(db, 'rooms/' + roomId);
-                onValue(roomRef, (snapshot) => {
-                    const data = snapshot.val();
-                    console.log('Данные комнаты:', data);
+        function checkStairs() {
+            const gridX = Math.floor(player.x / MAP.gridSize);
+            const gridY = Math.floor(player.y / MAP.gridSize);
+            
+            for (const obj of MAP.objects.filter(o => o.type === 'stairs')) {
+                if (obj.x === gridX && obj.y === gridY) {
+                    player.floor = player.floor === 1 ? 2 : 1;
+                    addLog(`Перешел на ${player.floor} этаж`);
                     
-                    if (data && data.players) {
-                        document.getElementById('playersCount').textContent = 
-                            Object.keys(data.players).length;
+                    // Телепорт на другой этаж
+                    if (player.floor === 2) {
+                        player.x = 10 * MAP.gridSize;
+                        player.y = 5 * MAP.gridSize;
+                    } else {
+                        player.x = 12 * MAP.gridSize;
+                        player.y = 16 * MAP.gridSize;
                     }
-                });
+                    break;
+                }
+            }
+        }
+        
+        function checkCatch() {
+            Object.entries(otherPlayers).forEach(([id, p]) => {
+                if (p.isGranny || p.caught || p.hidden || p.floor !== player.floor) return;
                 
-            }).catch(err => {
-                console.error('Ошибка Firebase:', err);
-                document.getElementById('debugText').textContent += ' | Firebase ошибка';
+                const dist = Math.sqrt(
+                    Math.pow(player.x - p.x, 2) + 
+                    Math.pow(player.y - p.y, 2)
+                );
+                
+                if (dist < 30) {
+                    addLog(`${p.name} пойман!`);
+                    // В реальной игре тут нужно обновить Firebase
+                }
             });
-        }, 1000);
+        }
+        
+        function syncPlayer() {
+            // Синхронизируем каждые 100мс
+            if (Date.now() - player.lastUpdate > 100) {
+                player.lastUpdate = Date.now();
+                
+                if (window.updatePlayerPosition) {
+                    window.updatePlayerPosition();
+                }
+            }
+        }
+        
+        function addLog(message) {
+            const now = new Date();
+            const time = `${now.getMinutes().toString().padStart(2,'0')}:${now.getSeconds().toString().padStart(2,'0')}`;
+            
+            const p = document.createElement('p');
+            p.textContent = `[${time}] ${message}`;
+            logElement.appendChild(p);
+            
+            // Лимит сообщений
+            while (logElement.children.length > 10) {
+                logElement.removeChild(logElement.firstChild);
+            }
+            
+            logElement.scrollTop = logElement.scrollHeight;
+        }
+        
+        function endGame(message, winner) {
+            gameActive = false;
+            clearInterval(gameTimer);
+            
+            addLog(`=== ${message} ===`);
+            
+            setTimeout(() => {
+                alert(message + '\n\nВозвращаемся в лобби...');
+                window.location.href = 'index.html';
+            }, 2000);
+        }
+        
+        // Запуск игры
+        gameLoop();
+        addLog(`Добро пожаловать в дом Granny!`);
+        addLog(`Вы ${isGranny ? 'Granny' : 'выживший'}. ${isGranny ? 'Ловите других!' : 'Прячьтесь и убегайте!'}`);
+        debugElement.textContent = `Игра запущена | X:${player.x} Y:${player.y}`;
+        
+        console.log('Игровой движок запущен');
     </script>
 </body>
 </html>
