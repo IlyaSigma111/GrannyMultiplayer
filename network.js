@@ -5,12 +5,10 @@ let connections = {};
 let roomId = null;
 let playerId = null;
 
-// Инициализация PeerJS
 export function initNetwork(room, player) {
     roomId = room;
     playerId = player;
     
-    // Создаем Peer с уникальным ID
     peer = new Peer(`granny-${roomId}-${playerId}`, {
         debug: 0,
         config: { iceServers: [{ urls: 'stun:stun.l.google.com:19302' }] }
@@ -18,7 +16,6 @@ export function initNetwork(room, player) {
     
     peer.on('open', (id) => {
         console.log('Peer подключен:', id);
-        // Сохраняем наш peerId в Firebase
         updatePlayerData({ peerId: id });
     });
     
@@ -31,11 +28,9 @@ export function initNetwork(room, player) {
         console.error('PeerJS ошибка:', err);
     });
     
-    // Слушаем других игроков в комнате
     listenForPlayers();
 }
 
-// Слушаем добавление новых игроков
 function listenForPlayers() {
     const playersRef = ref(database, `rooms/${roomId}/players`);
     
@@ -51,13 +46,11 @@ function listenForPlayers() {
     });
 }
 
-// Подключаемся к другому игроку
 function connectToPlayer(playerId, peerId) {
     const conn = peer.connect(peerId, { reliable: true });
     setupConnection(conn, playerId);
 }
 
-// Настройка соединения
 function setupConnection(conn, targetPlayerId = null) {
     const pid = targetPlayerId || conn.peer.split('-')[2];
     
@@ -65,7 +58,6 @@ function setupConnection(conn, targetPlayerId = null) {
         console.log(`Соединение с ${pid} открыто`);
         connections[pid] = conn;
         
-        // Отправляем наше начальное состояние
         conn.send({
             type: 'playerState',
             playerId: playerId,
@@ -87,7 +79,6 @@ function setupConnection(conn, targetPlayerId = null) {
     });
 }
 
-// Отправка данных всем игрокам
 export function broadcast(data) {
     Object.values(connections).forEach(conn => {
         if (conn.open) {
@@ -96,14 +87,12 @@ export function broadcast(data) {
     });
 }
 
-// Отправка данных конкретному игроку
 export function sendTo(playerId, data) {
     if (connections[playerId] && connections[playerId].open) {
         connections[playerId].send(data);
     }
 }
 
-// Обработка входящих данных
 function handleNetworkData(data) {
     switch (data.type) {
         case 'playerState':
@@ -126,19 +115,16 @@ function handleNetworkData(data) {
     }
 }
 
-// Обновление данных игрока в Firebase
 export function updatePlayerData(data) {
     const playerRef = ref(database, `rooms/${roomId}/players/${playerId}`);
     update(playerRef, data);
 }
 
-// Получение данных комнаты
 export function getRoomData(callback) {
     const roomRef = ref(database, `rooms/${roomId}`);
     return onValue(roomRef, callback);
 }
 
-// Удаление игрока при выходе
 export function cleanup() {
     if (roomId && playerId) {
         const playerRef = ref(database, `rooms/${roomId}/players/${playerId}`);
