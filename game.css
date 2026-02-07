@@ -41,7 +41,6 @@
     height: auto;
 }
 
-/* Управление */
 .controls {
     margin-top: 15px;
     text-align: center;
@@ -52,7 +51,6 @@
     font-size: 0.9rem;
 }
 
-/* Мобильное управление */
 .mobile-controls {
     display: none;
     justify-content: space-between;
@@ -113,7 +111,6 @@
     transform: scale(0.95);
 }
 
-/* Лог игры */
 .game-log {
     background: rgba(0, 0, 0, 0.7);
     border-radius: 10px;
@@ -125,7 +122,6 @@
     color: #ccc;
 }
 
-/* Модальное окно */
 .modal {
     display: none;
     position: fixed;
@@ -159,7 +155,6 @@
     padding: 12px 30px;
 }
 
-/* Адаптация для мобилок */
 @media (max-width: 768px) {
     .game-header {
         flex-direction: column;
