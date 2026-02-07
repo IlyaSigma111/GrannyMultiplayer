@@ -6,13 +6,6 @@
     <title>Granny 2D - Игра</title>
     <link rel="stylesheet" href="style.css">
     <link rel="stylesheet" href="game.css">
-    <script type="module" src="firebase.js"></script>
-    <script src="https://unpkg.com/peerjs@1.4.7/dist/peerjs.min.js"></script>
-    <style>
-        /* Временно добавьте CSS сюда, чтобы проверить */
-        body { background: #1a1a2e; color: white; }
-        canvas { border: 2px solid red; }
-    </style>
 </head>
 <body>
     <div class="game-container">
@@ -34,64 +27,179 @@
             <div class="desktop-controls">
                 <p>WASD - двигаться, SPACE - спрятаться, E - взаимодействовать</p>
             </div>
-            
-            <div class="mobile-controls">
-                <div class="d-pad">
-                    <button class="d-btn up" data-key="w">↑</button>
-                    <button class="d-btn left" data-key="a">←</button>
-                    <button class="d-btn down" data-key="s">↓</button>
-                    <button class="d-btn right" data-key="d">→</button>
-                </div>
-                <div class="action-buttons">
-                    <button class="action-btn hide-btn" data-action="hide">Прятаться</button>
-                    <button class="action-btn interact-btn" data-action="interact">Действие</button>
-                </div>
-            </div>
         </div>
         
         <div class="game-log" id="gameLog">
-            <p>Добро пожаловать в дом Granny!</p>
+            <p id="debugText">Загрузка игры...</p>
         </div>
     </div>
     
-    <div id="resultModal" class="modal" style="display:none;">
-        <div class="modal-content">
-            <h2 id="resultTitle">Игра окончена!</h2>
-            <p id="resultText"></p>
-            <button onclick="window.location.href='index.html'">В лобби</button>
-        </div>
-    </div>
-    
-    <script type="module">
-        // Показываем отладку
-        console.log('Game page loaded');
-        console.log('URL params:', window.location.search);
+    <script>
+        // === УПРОЩЕННАЯ ВЕРСИЯ ИГРЫ ДЛЯ ТЕСТА ===
+        console.log('=== ИГРА ЗАПУСКАЕТСЯ ===');
         
-        // Временно простой тест
+        // Параметры из URL
+        const urlParams = new URLSearchParams(window.location.search);
+        const roomId = urlParams.get('room');
+        const playerId = urlParams.get('player');
+        const isGranny = urlParams.get('granny') === 'true';
+        
+        console.log('Параметры:', { roomId, playerId, isGranny });
+        
+        // Обновляем интерфейс
+        document.getElementById('roleText').textContent = isGranny ? 'Granny 👵' : 'Выживший 🏃';
+        document.getElementById('roleText').style.color = isGranny ? '#ff4757' : '#00ff88';
+        document.getElementById('debugText').textContent = `Комната: ${roomId}, Игрок: ${playerId}`;
+        
+        // Инициализация игры
         const canvas = document.getElementById('gameCanvas');
         const ctx = canvas.getContext('2d');
         
-        // Рисуем тестовый круг
-        ctx.fillStyle = '#ff4757';
-        ctx.beginPath();
-        ctx.arc(400, 300, 50, 0, Math.PI * 2);
-        ctx.fill();
+        // Простая карта
+        const MAP = {
+            gridSize: 40,
+            width: 20,
+            height: 15
+        };
         
-        ctx.fillStyle = 'white';
-        ctx.font = '20px Arial';
-        ctx.fillText('Игра загружается...', 300, 320);
+        // Игрок
+        const player = {
+            x: 5 * MAP.gridSize,
+            y: 12 * MAP.gridSize,
+            color: isGranny ? '#ff0000' : '#00a8ff',
+            size: 15
+        };
         
-        // Проверяем параметры
-        const urlParams = new URLSearchParams(window.location.search);
-        const room = urlParams.get('room');
-        const player = urlParams.get('player');
-        const granny = urlParams.get('granny');
+        // Другие игроки (тестовые)
+        const testPlayers = [
+            { x: 10 * MAP.gridSize, y: 8 * MAP.gridSize, color: '#00a8ff', size: 15 },
+            { x: 15 * MAP.gridSize, y: 5 * MAP.gridSize, color: '#00a8ff', size: 15 }
+        ];
         
-        console.log('Room:', room, 'Player:', player, 'Granny:', granny);
+        // Управление
+        const keys = {};
+        window.addEventListener('keydown', (e) => keys[e.key.toLowerCase()] = true);
+        window.addEventListener('keyup', (e) => keys[e.key.toLowerCase()] = false);
         
-        if (!room || !player) {
-            ctx.fillText('Ошибка: нет параметров комнаты!', 250, 350);
+        // Таймер
+        let gameTime = 120;
+        const timerElement = document.getElementById('timer');
+        
+        const timer = setInterval(() => {
+            gameTime--;
+            timerElement.textContent = gameTime;
+            
+            if (gameTime <= 0) {
+                clearInterval(timer);
+                alert('Время вышло!');
+            }
+        }, 1000);
+        
+        // Игровой цикл
+        function gameLoop() {
+            // Очистка
+            ctx.fillStyle = '#1a1a1a';
+            ctx.fillRect(0, 0, canvas.width, canvas.height);
+            
+            // Сетка
+            ctx.strokeStyle = '#333';
+            ctx.lineWidth = 1;
+            for (let x = 0; x <= MAP.width; x++) {
+                ctx.beginPath();
+                ctx.moveTo(x * MAP.gridSize, 0);
+                ctx.lineTo(x * MAP.gridSize, canvas.height);
+                ctx.stroke();
+            }
+            for (let y = 0; y <= MAP.height; y++) {
+                ctx.beginPath();
+                ctx.moveTo(0, y * MAP.gridSize);
+                ctx.lineTo(canvas.width, y * MAP.gridSize);
+                ctx.stroke();
+            }
+            
+            // Дом (простой)
+            ctx.fillStyle = '#2a2a2a';
+            ctx.fillRect(5 * MAP.gridSize, 5 * MAP.gridSize, 10 * MAP.gridSize, 8 * MAP.gridSize);
+            
+            // Дверь
+            ctx.fillStyle = '#8B4513';
+            ctx.fillRect(10 * MAP.gridSize, 12 * MAP.gridSize, 2 * MAP.gridSize, MAP.gridSize);
+            
+            // Движение игрока
+            const speed = 3;
+            if (keys['w'] || keys['arrowup']) player.y -= speed;
+            if (keys['s'] || keys['arrowdown']) player.y += speed;
+            if (keys['a'] || keys['arrowleft']) player.x -= speed;
+            if (keys['d'] || keys['arrowright']) player.x += speed;
+            
+            // Границы
+            player.x = Math.max(0, Math.min(canvas.width - player.size * 2, player.x));
+            player.y = Math.max(0, Math.min(canvas.height - player.size * 2, player.y));
+            
+            // Рисуем других игроков
+            testPlayers.forEach(p => {
+                ctx.fillStyle = p.color;
+                ctx.beginPath();
+                ctx.arc(p.x + player.size, p.y + player.size, p.size, 0, Math.PI * 2);
+                ctx.fill();
+                
+                // Имя
+                ctx.fillStyle = 'white';
+                ctx.font = '12px Arial';
+                ctx.fillText('Игрок', p.x - 10, p.y - 10);
+            });
+            
+            // Рисуем текущего игрока
+            ctx.fillStyle = player.color;
+            ctx.beginPath();
+            ctx.arc(player.x + player.size, player.y + player.size, player.size, 0, Math.PI * 2);
+            ctx.fill();
+            
+            // Имя текущего игрока
+            ctx.fillStyle = 'white';
+            ctx.font = '12px Arial';
+            ctx.fillText(isGranny ? 'Granny' : 'Вы', player.x - 10, player.y - 10);
+            
+            // Инфо
+            ctx.fillStyle = 'white';
+            ctx.font = '14px Arial';
+            ctx.fillText(`FPS: ${Math.round(1000/16)}`, 10, 20);
+            ctx.fillText(`X: ${Math.round(player.x)}, Y: ${Math.round(player.y)}`, 10, 40);
+            
+            requestAnimationFrame(gameLoop);
         }
+        
+        // Запускаем игру
+        gameLoop();
+        console.log('Игра запущена!');
+        
+        // Тест Firebase
+        setTimeout(() => {
+            console.log('Тест Firebase...');
+            import('./firebase.js').then(module => {
+                console.log('Firebase загружен успешно');
+                
+                // Проверяем комнату
+                const db = module.database;
+                const ref = module.ref;
+                const onValue = module.onValue;
+                
+                const roomRef = ref(db, 'rooms/' + roomId);
+                onValue(roomRef, (snapshot) => {
+                    const data = snapshot.val();
+                    console.log('Данные комнаты:', data);
+                    
+                    if (data && data.players) {
+                        document.getElementById('playersCount').textContent = 
+                            Object.keys(data.players).length;
+                    }
+                });
+                
+            }).catch(err => {
+                console.error('Ошибка Firebase:', err);
+                document.getElementById('debugText').textContent += ' | Firebase ошибка';
+            });
+        }, 1000);
     </script>
 </body>
 </html>
