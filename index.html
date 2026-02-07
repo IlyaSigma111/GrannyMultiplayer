@@ -1,73 +1,78 @@
-<!DOCTYPE html>
-<html lang="ru">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Granny Multiplayer</title>
-    <link rel="stylesheet" href="style.css">
-    <script type="module" src="firebase.js"></script>
-</head>
-<body>
-    <!-- Экран входа -->
-    <div id="login-screen" class="screen">
-        <div class="container">
-            <h1>👵 Granny Multiplayer</h1>
-            <p>Страшная гренни ищет тебя!</p>
-            <button id="google-login" class="btn">Войти через Google</button>
-            <div id="login-status"></div>
+<!-- В login-screen замените на: -->
+<div id="login-screen" class="screen">
+    <div class="login-container">
+        <div class="login-header">
+            <h2><i class="fas fa-user"></i> Вход в игру</h2>
+            <p>Выберите ник и начните играть!</p>
         </div>
-    </div>
-
-    <!-- Меню лобби -->
-    <div id="lobby-screen" class="screen hidden">
-        <div class="container">
-            <h2>👾 Лобби</h2>
-            <div class="user-info">
-                <img id="user-avatar" src="" alt="Аватар">
-                <span id="user-name"></span>
-            </div>
-            
-            <div class="lobby-controls">
-                <button id="create-room" class="btn">Создать комнату</button>
-                <button id="join-room" class="btn">Присоединиться</button>
-                <button id="logout" class="btn logout">Выйти</button>
-            </div>
-            
-            <div class="rooms-list">
-                <h3>Доступные комнаты:</h3>
-                <div id="rooms-container"></div>
-            </div>
-            
-            <div id="room-info" class="hidden">
-                <h3>Комната: <span id="room-id"></span></h3>
-                <div id="players-list"></div>
-                <button id="start-game" class="btn start">Начать игру</button>
-                <button id="leave-room" class="btn">Покинуть комнату</button>
-            </div>
-        </div>
-    </div>
-
-    <!-- Игровой экран -->
-    <div id="game-screen" class="screen hidden">
-        <canvas id="game-canvas"></canvas>
         
-        <!-- Мобильный джойстик -->
-        <div id="mobile-controls" class="mobile-controls hidden">
-            <div class="joystick-area" id="movement-joystick">
-                <div class="joystick"></div>
+        <div class="login-form">
+            <div class="form-group">
+                <label for="username">
+                    <i class="fas fa-user-tag"></i> Ваш никнейм:
+                </label>
+                <input 
+                    type="text" 
+                    id="username" 
+                    placeholder="Введите имя (3-20 символов)"
+                    maxlength="20"
+                    autocomplete="off"
+                >
+                <div class="hint">Другие игроки увидят это имя</div>
+            </div>
+            
+            <div class="form-group">
+                <label for="avatar-color">
+                    <i class="fas fa-palette"></i> Цвет игрока:
+                </label>
+                <div class="color-picker">
+                    <div class="color-option" data-color="#FF5252" style="background-color: #FF5252;"></div>
+                    <div class="color-option" data-color="#4CAF50" style="background-color: #4CAF50;"></div>
+                    <div class="color-option" data-color="#2196F3" style="background-color: #2196F3;"></div>
+                    <div class="color-option" data-color="#FF9800" style="background-color: #FF9800;"></div>
+                    <div class="color-option" data-color="#9C27B0" style="background-color: #9C27B0;"></div>
+                    <div class="color-option" data-color="#00BCD4" style="background-color: #00BCD4;"></div>
+                </div>
+                <input type="hidden" id="avatar-color" value="#4CAF50">
+            </div>
+            
+            <div class="form-group">
+                <label class="checkbox-label">
+                    <input type="checkbox" id="remember-me" checked>
+                    <span>Запомнить меня</span>
+                </label>
+            </div>
+            
+            <button id="simple-login" class="btn primary">
+                <i class="fas fa-play"></i>
+                Начать игру
+            </button>
+            
+            <div class="login-stats">
+                <p><i class="fas fa-users"></i> Игроков онлайн: <span id="online-count">0</span></p>
+                <p><i class="fas fa-door-open"></i> Активных комнат: <span id="rooms-count">0</span></p>
             </div>
         </div>
         
-        <!-- Игровой интерфейс -->
-        <div class="game-ui">
-            <div class="timer">Время: <span id="game-timer">120</span>с</div>
-            <div class="role-display" id="role-display"></div>
-            <div class="players-count">Игроков: <span id="players-count">0</span></div>
+        <div class="login-footer">
+            <p class="disclaimer">
+                <i class="fas fa-info-circle"></i>
+                Игра сохраняется локально. Для игры с друзьями нужен код комнаты.
+            </p>
         </div>
-        
-        <button id="exit-game" class="btn exit-btn">Выйти из игры</button>
     </div>
+</div>
 
-    <script src="game.js"></script>
-</body>
-</html>
+<!-- В главном меню обновите профиль: -->
+<div class="player-profile">
+    <div class="avatar-circle" id="profile-avatar" style="background-color: #4CAF50;">
+        <span id="avatar-letter">П</span>
+    </div>
+    <div class="profile-info">
+        <span id="profile-name" class="profile-name">Гость</span>
+        <button id="change-profile" class="profile-login">
+            <i class="fas fa-edit"></i>
+            Сменить
+        </button>
+    </div>
+</div>
