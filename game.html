@@ -64,6 +64,10 @@
             color: #00a8ff; 
             font-size: 16px; 
         }
+        .caught-count {
+            color: #ff4757;
+            font-size: 16px;
+        }
         
         #gameCanvas {
             position: fixed;
@@ -136,6 +140,10 @@
             background: rgba(0, 168, 255, 0.8);
         }
         
+        .action-btn.catch-btn {
+            background: rgba(255, 0, 0, 0.8);
+        }
+        
         .exit-btn {
             background: #ff4757;
             color: white;
@@ -197,12 +205,57 @@
             z-index: 900;
         }
         
+        .game-over-screen {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: rgba(0, 0, 0, 0.9);
+            display: none;
+            flex-direction: column;
+            justify-content: center;
+            align-items: center;
+            z-index: 3000;
+            color: white;
+            text-align: center;
+            padding: 20px;
+        }
+        
+        .game-over-screen.active {
+            display: flex;
+        }
+        
+        .game-over-title {
+            font-size: 36px;
+            margin-bottom: 20px;
+            color: #ff4757;
+        }
+        
+        .game-over-text {
+            font-size: 20px;
+            margin-bottom: 30px;
+            max-width: 500px;
+        }
+        
+        .restart-btn {
+            background: #00ff88;
+            color: #000;
+            border: none;
+            padding: 15px 30px;
+            border-radius: 10px;
+            font-size: 18px;
+            font-weight: bold;
+            cursor: pointer;
+            margin-top: 20px;
+        }
+        
         @media (max-width: 768px) {
             .game-header {
                 padding: 8px 10px;
             }
             
-            .timer, .role, .players-online {
+            .timer, .role, .players-online, .caught-count {
                 font-size: 14px;
             }
             
@@ -228,6 +281,14 @@
                 height: 55px;
                 font-size: 20px;
             }
+            
+            .game-over-title {
+                font-size: 28px;
+            }
+            
+            .game-over-text {
+                font-size: 16px;
+            }
         }
         
         @media (max-width: 480px) {
@@ -252,7 +313,7 @@
     </style>
     <script type="module">
         import { initializeApp } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-app.js";
-        import { getDatabase, ref, set, onValue, update, remove } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-database.js";
+        import { getDatabase, ref, set, onValue, update, remove, get } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-database.js";
         
         const firebaseConfig = {
             apiKey: "AIzaSyDHKz6YuGSYzyO-Sj6IS93C9mV0yX0Yfbg",
@@ -273,6 +334,7 @@
         window.firebaseOnValue = onValue;
         window.firebaseUpdate = update;
         window.firebaseRemove = remove;
+        window.firebaseGet = get;
     </script>
 </head>
 <body>
@@ -288,6 +350,7 @@
                 <div class="timer">⏱️ <span id="timer">120</span>с</div>
                 <div class="role">🎭 <span id="roleText">Выживший</span></div>
                 <div class="players-online">👥 <span id="playersCount">0</span></div>
+                <div class="caught-count" id="caughtCount" style="display: none;">👻 Поймано: <span id="caughtNumber">0</span></div>
             </div>
             <div class="header-right">
                 <button class="exit-btn" onclick="exitGame()">🚪 Выйти</button>
@@ -303,12 +366,19 @@
             <div class="action-buttons">
                 <button class="action-btn hide-btn" id="hideBtn">👁️</button>
                 <button class="action-btn" id="flashlightBtn">🔦</button>
+                <button class="action-btn catch-btn" id="catchBtn" style="display: none;">👊</button>
             </div>
         </div>
         
         <div class="debug-panel" id="debugPanel">
             <div>🔄 Подключение...</div>
         </div>
+    </div>
+    
+    <div class="game-over-screen" id="gameOverScreen">
+        <div class="game-over-title" id="gameOverTitle">Игра Окончена!</div>
+        <div class="game-over-text" id="gameOverText"></div>
+        <button class="restart-btn" onclick="window.location.href='index.html'">Вернуться в лобби</button>
     </div>
 
     <script>
@@ -319,6 +389,10 @@
         let otherPlayers = {};
         let gameActive = false;
         let isMobile = false;
+        let gameStartTime = 0;
+        let totalGameTime = 120;
+        let caughtPlayers = 0;
+        let totalPlayers = 0;
         
         // ===== ИНИЦИАЛИЗАЦИЯ =====
         document.addEventListener('DOMContentLoaded', async function() {
@@ -342,6 +416,12 @@
             // Настройка интерфейса
             document.getElementById('roleText').textContent = isGranny ? 'Granny 👵' : 'Выживший 🏃';
             document.getElementById('roleText').style.color = isGranny ? '#ff4757' : '#00ff88';
+            
+            if (isGranny) {
+                document.getElementById('caughtCount').style.display = 'block';
+                document.getElementById('catchBtn').style.display = 'block';
+            }
+            
             document.getElementById('loadingText').textContent = `Комната: ${roomId}`;
             
             // Определяем устройство
@@ -370,7 +450,6 @@
             if (!canvas) return;
             canvas.width = window.innerWidth;
             canvas.height = window.innerHeight;
-            console.log('Canvas размер:', canvas.width, 'x', canvas.height);
         }
         
         function createPlayer() {
@@ -384,36 +463,45 @@
                 isGranny: isGranny,
                 floor: 1,
                 hidden: false,
-                speed: isGranny ? 2.5 : 3.5,
+                caught: false,
+                speed: isGranny ? 3.0 : 3.5,
                 lastUpdate: 0,
                 joystickX: 0,
-                joystickY: 0
+                joystickY: 0,
+                catchCooldown: 0
             };
         }
         
         // ===== КАРТА =====
         const MAP = {
             gridSize: 50,
-            width: 24,
-            height: 18,
+            width: 40,
+            height: 30,
             
             rooms: [
-                { id: 'entrance', name: 'Прихожая', x: 8, y: 10, w: 8, h: 6, floor: 1 },
-                { id: 'livingroom', name: 'Гостиная', x: 2, y: 6, w: 10, h: 8, floor: 1 },
-                { id: 'kitchen', name: 'Кухня', x: 12, y: 8, w: 8, h: 8, floor: 1 },
-                { id: 'bedroom', name: 'Спальня', x: 6, y: 2, w: 8, h: 6, floor: 2 }
+                { id: 'entrance', name: 'Прихожая', x: 15, y: 20, w: 10, h: 8, floor: 1 },
+                { id: 'livingroom', name: 'Гостиная', x: 5, y: 10, w: 12, h: 10, floor: 1 },
+                { id: 'kitchen', name: 'Кухня', x: 25, y: 15, w: 10, h: 10, floor: 1 },
+                { id: 'dining', name: 'Столовая', x: 17, y: 10, w: 8, h: 10, floor: 1 },
+                { id: 'garage', name: 'Гараж', x: 5, y: 20, w: 10, h: 8, floor: 1 },
+                { id: 'bedroom', name: 'Спальня', x: 10, y: 5, w: 12, h: 8, floor: 2 },
+                { id: 'bathroom', name: 'Ванная', x: 25, y: 5, w: 8, h: 8, floor: 2 }
             ],
             
             objects: [
-                { x: 11, y: 10, type: 'door', floor: 1 },
-                { x: 16, y: 11, type: 'door', floor: 1 },
-                { x: 7, y: 9, type: 'door', floor: 1 },
-                { x: 10, y: 11, type: 'closet', floor: 1 },
-                { x: 14, y: 10, type: 'fridge', floor: 1 },
-                { x: 4, y: 7, type: 'sofa', floor: 1 },
-                { x: 8, y: 3, type: 'bed', floor: 2 },
-                { x: 12, y: 14, type: 'stairs', floor: 1 },
-                { x: 12, y: 3, type: 'stairs', floor: 2 }
+                { x: 19, y: 20, type: 'door', floor: 1 },
+                { x: 28, y: 18, type: 'door', floor: 1 },
+                { x: 8, y: 23, type: 'door', floor: 1 },
+                { x: 17, y: 12, type: 'door', floor: 1 },
+                { x: 17, y: 22, type: 'closet', floor: 1 },
+                { x: 27, y: 18, type: 'fridge', floor: 1 },
+                { x: 7, y: 22, type: 'car', floor: 1 },
+                { x: 6, y: 12, type: 'sofa', floor: 1 },
+                { x: 19, y: 11, type: 'table', floor: 1 },
+                { x: 12, y: 7, type: 'bed', floor: 2 },
+                { x: 26, y: 7, type: 'bathtub', floor: 2 },
+                { x: 18, y: 24, type: 'stairs', floor: 1 },
+                { x: 18, y: 7, type: 'stairs', floor: 2 }
             ]
         };
         
@@ -442,78 +530,119 @@
         async function initFirebase() {
             return new Promise((resolve) => {
                 try {
-                    const playerRef = window.firebaseRef(window.firebaseDB, `rooms/${roomId}/players/${playerId}`);
+                    const roomRef = window.firebaseRef(window.firebaseDB, `rooms/${roomId}`);
                     
-                    // Сначала записываем себя
-                    window.firebaseSet(playerRef, {
-                        id: playerId,
-                        name: player.name,
-                        isGranny: player.isGranny,
-                        x: player.x,
-                        y: player.y,
-                        floor: player.floor,
-                        hidden: player.hidden,
-                        online: true,
-                        joinedAt: Date.now(),
-                        lastUpdate: Date.now()
-                    }).then(() => {
-                        console.log('Игрок записан в Firebase');
-                        updateDebugInfo('✅ Подключено');
+                    // Получаем текущее состояние комнаты
+                    window.firebaseGet(roomRef).then((snapshot) => {
+                        const roomData = snapshot.val() || {};
                         
-                        // Слушаем всех игроков
-                        const playersRef = window.firebaseRef(window.firebaseDB, `rooms/${roomId}/players`);
-                        window.firebaseOnValue(playersRef, (snapshot) => {
-                            const players = snapshot.val() || {};
-                            const count = Object.keys(players).length;
+                        // Время игры
+                        if (roomData.startTime) {
+                            gameStartTime = roomData.startTime;
+                        } else {
+                            gameStartTime = Date.now();
+                            window.firebaseUpdate(roomRef, { 
+                                startTime: gameStartTime,
+                                totalTime: totalGameTime,
+                                gameActive: true
+                            });
+                        }
+                        
+                        // Записываем игрока
+                        const playerRef = window.firebaseRef(window.firebaseDB, `rooms/${roomId}/players/${playerId}`);
+                        window.firebaseSet(playerRef, {
+                            id: playerId,
+                            name: player.name,
+                            isGranny: player.isGranny,
+                            x: player.x,
+                            y: player.y,
+                            floor: player.floor,
+                            hidden: player.hidden,
+                            caught: false,
+                            online: true,
+                            joinedAt: Date.now(),
+                            lastUpdate: Date.now()
+                        }).then(() => {
+                            console.log('Игрок записан в Firebase');
+                            updateDebugInfo('✅ Подключено');
                             
-                            // ОБНОВЛЯЕМ СЧЕТЧИК ПРАВИЛЬНО
-                            document.getElementById('playersCount').textContent = count;
+                            // Слушаем всех игроков
+                            const playersRef = window.firebaseRef(window.firebaseDB, `rooms/${roomId}/players`);
+                            window.firebaseOnValue(playersRef, (snapshot) => {
+                                const players = snapshot.val() || {};
+                                const count = Object.keys(players).length;
+                                totalPlayers = count;
+                                
+                                // Считаем пойманных
+                                caughtPlayers = 0;
+                                Object.values(players).forEach(p => {
+                                    if (p.caught) caughtPlayers++;
+                                });
+                                
+                                document.getElementById('playersCount').textContent = count;
+                                document.getElementById('caughtNumber').textContent = caughtPlayers;
+                                
+                                // Обновляем других игроков
+                                otherPlayers = {};
+                                Object.entries(players).forEach(([id, data]) => {
+                                    if (id !== playerId && data) {
+                                        otherPlayers[id] = {
+                                            x: data.x || 0,
+                                            y: data.y || 0,
+                                            floor: data.floor || 1,
+                                            hidden: data.hidden || false,
+                                            caught: data.caught || false,
+                                            isGranny: data.isGranny || false,
+                                            name: data.name || 'Игрок',
+                                            color: data.caught ? '#555' : (data.isGranny ? '#ff0000' : '#00a8ff'),
+                                            lastSeen: data.lastUpdate || 0
+                                        };
+                                    }
+                                });
+                                
+                                // Проверяем конец игры
+                                checkGameEnd();
+                                
+                                updateDebugInfo(`✅ Игроков: ${count}<br>Поймано: ${caughtPlayers}`);
+                            });
                             
-                            // Обновляем других игроков
-                            otherPlayers = {};
-                            Object.entries(players).forEach(([id, data]) => {
-                                if (id !== playerId && data && data.online !== false) {
-                                    otherPlayers[id] = {
-                                        x: data.x || 0,
-                                        y: data.y || 0,
-                                        floor: data.floor || 1,
-                                        hidden: data.hidden || false,
-                                        isGranny: data.isGranny || false,
-                                        name: data.name || 'Игрок',
-                                        color: data.isGranny ? '#ff0000' : '#00a8ff',
-                                        lastSeen: data.lastUpdate || 0
-                                    };
+                            // Слушаем время игры
+                            window.firebaseOnValue(roomRef, (snapshot) => {
+                                const data = snapshot.val();
+                                if (data && data.startTime) {
+                                    gameStartTime = data.startTime;
+                                }
+                                if (data && data.gameOver) {
+                                    showGameOver(data.winner);
                                 }
                             });
                             
-                            // Обновляем отладку
-                            updateDebugInfo(`✅ Игроков: ${count}<br>Вы: ${playerId.slice(0,8)}`);
+                            // Обновляем свою позицию
+                            setInterval(() => {
+                                if (!player || !gameActive) return;
+                                
+                                window.firebaseUpdate(playerRef, {
+                                    x: player.x,
+                                    y: player.y,
+                                    floor: player.floor,
+                                    hidden: player.hidden,
+                                    caught: player.caught,
+                                    lastUpdate: Date.now(),
+                                    online: true
+                                });
+                            }, 100);
+                            
+                            resolve();
                         });
                         
-                        // Обновляем свою позицию каждые 100мс
-                        setInterval(() => {
-                            if (!player || !gameActive) return;
-                            
-                            window.firebaseUpdate(playerRef, {
-                                x: player.x,
-                                y: player.y,
-                                floor: player.floor,
-                                hidden: player.hidden,
-                                lastUpdate: Date.now(),
-                                online: true
-                            });
-                        }, 100);
-                        
-                        resolve();
                     }).catch(error => {
-                        console.error('Ошибка записи в Firebase:', error);
-                        updateDebugInfo('❌ Ошибка подключения');
-                        resolve(); // Все равно продолжаем
+                        console.error('Ошибка Firebase:', error);
+                        resolve();
                     });
                     
                 } catch (error) {
                     console.error('Ошибка Firebase:', error);
-                    resolve(); // Все равно продолжаем
+                    resolve();
                 }
             });
         }
@@ -539,6 +668,11 @@
             
             if (key === 'f') {
                 toggleFlashlight();
+            }
+            
+            // Кнопка ловли для Granny
+            if (key === 'e' && player.isGranny) {
+                catchPlayer();
             }
         });
         
@@ -617,8 +751,15 @@
             toggleFlashlight();
         });
         
+        document.getElementById('catchBtn').addEventListener('touchstart', (e) => {
+            e.preventDefault();
+            if (player.isGranny) {
+                catchPlayer();
+            }
+        });
+        
         function toggleHide() {
-            if (!player) return;
+            if (!player || player.caught || player.isGranny) return;
             
             if (player.hidden) {
                 player.hidden = false;
@@ -632,8 +773,75 @@
         
         let flashlightOn = false;
         function toggleFlashlight() {
-            if (!player || player.isGranny) return;
+            if (!player || player.isGranny || player.caught) return;
             flashlightOn = !flashlightOn;
+        }
+        
+        // ===== СИСТЕМА ЛОВЛИ =====
+        function catchPlayer() {
+            if (!player.isGranny || player.catchCooldown > 0) return;
+            
+            // Проверяем игроков рядом
+            let caughtSomeone = false;
+            Object.entries(otherPlayers).forEach(([id, p]) => {
+                if (p.caught || p.isGranny || p.hidden || p.floor !== player.floor) return;
+                
+                const dist = Math.sqrt(
+                    Math.pow(player.x - p.x, 2) + 
+                    Math.pow(player.y - p.y, 2)
+                );
+                
+                // Если игрок близко (менее 40px)
+                if (dist < 40) {
+                    caughtSomeone = true;
+                    console.log(`Пойман игрок: ${id}`);
+                    
+                    // Обновляем в Firebase
+                    const caughtPlayerRef = window.firebaseRef(window.firebaseDB, `rooms/${roomId}/players/${id}`);
+                    window.firebaseUpdate(caughtPlayerRef, {
+                        caught: true,
+                        caughtBy: playerId,
+                        caughtAt: Date.now()
+                    });
+                    
+                    // Визуальный эффект
+                    showCatchEffect(p.x, p.y);
+                    
+                    // Кулдаун 1 секунда
+                    player.catchCooldown = 30; // 30 кадров = 0.5 секунды
+                }
+            });
+            
+            if (caughtSomeone) {
+                // Звуковой эффект (в консоли)
+                console.log('🔪 Granny поймала игрока!');
+            }
+        }
+        
+        function showCatchEffect(x, y) {
+            // Простой визуальный эффект
+            for (let i = 0; i < 10; i++) {
+                setTimeout(() => {
+                    if (!gameActive) return;
+                    
+                    ctx.save();
+                    ctx.setTransform(1, 0, 0, 1, 0, 0);
+                    const screenPos = worldToScreen(x, y);
+                    
+                    ctx.fillStyle = i % 2 === 0 ? '#ff0000' : '#ffffff';
+                    ctx.beginPath();
+                    ctx.arc(screenPos.x, screenPos.y, 20 + i * 2, 0, Math.PI * 2);
+                    ctx.fill();
+                    ctx.restore();
+                }, i * 50);
+            }
+        }
+        
+        function worldToScreen(worldX, worldY) {
+            return {
+                x: (worldX - CAMERA.x) * CAMERA.zoom,
+                y: (worldY - CAMERA.y) * CAMERA.zoom
+            };
         }
         
         // ===== ОТРИСОВКА =====
@@ -651,22 +859,19 @@
                 const w = room.w * MAP.gridSize;
                 const h = room.h * MAP.gridSize;
                 
-                // Пол
                 ctx.fillStyle = '#222';
                 ctx.fillRect(x, y, w, h);
                 
-                // Стены
                 ctx.strokeStyle = '#444';
                 ctx.lineWidth = 3;
                 ctx.strokeRect(x, y, w, h);
                 
-                // Название
                 ctx.fillStyle = '#888';
                 ctx.font = '14px Arial';
                 ctx.fillText(room.name, x + 5, y + 20);
             });
             
-            // Объекты (прозрачные)
+            // Объекты
             ctx.globalAlpha = 0.3;
             MAP.objects.forEach(obj => {
                 if (obj.floor !== player.floor) return;
@@ -698,29 +903,74 @@
                 const x = p.x;
                 const y = p.y;
                 
-                // Тень
-                ctx.fillStyle = 'rgba(0,0,0,0.3)';
-                ctx.beginPath();
-                ctx.ellipse(x + 10, y + 30, 12, 5, 0, 0, Math.PI * 2);
-                ctx.fill();
-                
-                // Игрок
-                ctx.fillStyle = p.color;
-                ctx.beginPath();
-                ctx.arc(x + 10, y + 10, p.hidden ? 8 : 15, 0, Math.PI * 2);
-                ctx.fill();
-                
-                // Имя (только если не спрятан)
-                if (!p.hidden) {
+                // Если пойман - серый цвет
+                if (p.caught) {
+                    // Тень
+                    ctx.fillStyle = 'rgba(0,0,0,0.3)';
+                    ctx.beginPath();
+                    ctx.ellipse(x + 10, y + 30, 12, 5, 0, 0, Math.PI * 2);
+                    ctx.fill();
+                    
+                    // Пойманный игрок (призрак)
+                    ctx.fillStyle = '#555';
+                    ctx.globalAlpha = 0.5;
+                    ctx.beginPath();
+                    ctx.arc(x + 10, y + 10, 12, 0, Math.PI * 2);
+                    ctx.fill();
+                    
+                    // Текст "Пойман"
                     ctx.fillStyle = '#fff';
-                    ctx.font = '12px Arial';
-                    ctx.fillText(p.name, x - 10, y - 5);
+                    ctx.font = '10px Arial';
+                    ctx.fillText('👻 Пойман', x - 15, y - 10);
+                    ctx.globalAlpha = 1.0;
+                    
+                } else {
+                    // Тень
+                    ctx.fillStyle = 'rgba(0,0,0,0.3)';
+                    ctx.beginPath();
+                    ctx.ellipse(x + 10, y + 30, 12, 5, 0, 0, Math.PI * 2);
+                    ctx.fill();
+                    
+                    // Игрок
+                    ctx.fillStyle = p.color;
+                    ctx.beginPath();
+                    ctx.arc(x + 10, y + 10, p.hidden ? 8 : 15, 0, Math.PI * 2);
+                    ctx.fill();
+                    
+                    // Имя
+                    if (!p.hidden) {
+                        ctx.fillStyle = '#fff';
+                        ctx.font = '12px Arial';
+                        ctx.fillText(p.name, x - 10, y - 5);
+                    }
+                    
+                    // Если спрятан
+                    if (p.hidden) {
+                        ctx.fillStyle = 'rgba(0,0,0,0.5)';
+                        ctx.fillRect(x - 5, y - 5, 30, 30);
+                    }
                 }
             });
             
             // Текущий игрок
             const x = player.x;
             const y = player.y;
+            
+            // Если пойман
+            if (player.caught) {
+                // Призрак
+                ctx.fillStyle = '#555';
+                ctx.globalAlpha = 0.7;
+                ctx.beginPath();
+                ctx.arc(x + 10, y + 10, 15, 0, Math.PI * 2);
+                ctx.fill();
+                
+                ctx.fillStyle = '#fff';
+                ctx.font = 'bold 14px Arial';
+                ctx.fillText('👻 Вы пойманы!', x - 25, y - 10);
+                ctx.globalAlpha = 1.0;
+                return;
+            }
             
             // Тень
             ctx.fillStyle = 'rgba(0,0,0,0.3)';
@@ -739,6 +989,32 @@
             ctx.font = 'bold 14px Arial';
             ctx.fillText(player.name + ' (Вы)', x - 15, y - 10);
             
+            // Если Granny - индикатор атаки
+            if (player.isGranny) {
+                if (player.catchCooldown > 0) {
+                    ctx.fillStyle = 'rgba(255,0,0,0.5)';
+                    ctx.beginPath();
+                    ctx.arc(x + 10, y + 10, 25, 0, Math.PI * 2);
+                    ctx.fill();
+                    
+                    // Текст кулдауна
+                    ctx.fillStyle = '#fff';
+                    ctx.font = '10px Arial';
+                    ctx.fillText('⏳', x + 5, y + 35);
+                } else {
+                    // Индикатор готовности атаки
+                    ctx.strokeStyle = '#ff0000';
+                    ctx.lineWidth = 2;
+                    ctx.beginPath();
+                    ctx.arc(x + 10, y + 10, 25, 0, Math.PI * 2);
+                    ctx.stroke();
+                    
+                    ctx.fillStyle = '#ff0000';
+                    ctx.font = '12px Arial';
+                    ctx.fillText('⚡ Готова атаковать!', x - 25, y - 25);
+                }
+            }
+            
             // Если спрятан
             if (player.hidden) {
                 ctx.fillStyle = 'rgba(0,0,0,0.7)';
@@ -756,23 +1032,25 @@
             // Очистка
             ctx.clearRect(0, 0, canvas.width, canvas.height);
             
-            // Движение
-            if (!player.hidden) {
+            // Кулдаун
+            if (player.catchCooldown > 0) {
+                player.catchCooldown--;
+            }
+            
+            // Движение (только если не пойман)
+            if (!player.caught && !player.hidden) {
                 let moveX = 0, moveY = 0;
                 
-                // Клавиатура
                 if (keys['w'] || keys['arrowup']) moveY -= 1;
                 if (keys['s'] || keys['arrowdown']) moveY += 1;
                 if (keys['a'] || keys['arrowleft']) moveX -= 1;
                 if (keys['d'] || keys['arrowright']) moveX += 1;
                 
-                // Джойстик
                 if (isMobile && joystickActive) {
                     moveX = player.joystickX;
                     moveY = player.joystickY;
                 }
                 
-                // Применяем движение
                 if (moveX !== 0 || moveY !== 0) {
                     const speed = player.speed;
                     const magnitude = Math.sqrt(moveX * moveX + moveY * moveY);
@@ -784,11 +1062,9 @@
                     const newX = player.x + moveX * speed;
                     const newY = player.y + moveY * speed;
                     
-                    // Границы
                     player.x = Math.max(0, Math.min(MAP.width * MAP.gridSize - player.size, newX));
                     player.y = Math.max(0, Math.min(MAP.height * MAP.gridSize - player.size, newY));
                     
-                    // Лестницы
                     checkStairs();
                 }
             }
@@ -803,8 +1079,6 @@
         }
         
         function checkStairs() {
-            if (!player) return;
-            
             const gridX = Math.floor((player.x + player.size/2) / MAP.gridSize);
             const gridY = Math.floor((player.y + player.size/2) / MAP.gridSize);
             
@@ -825,13 +1099,11 @@
         }
         
         function checkNearHideSpot() {
-            if (!player) return false;
-            
             const playerGridX = Math.floor((player.x + player.size/2) / MAP.gridSize);
             const playerGridY = Math.floor((player.y + player.size/2) / MAP.gridSize);
             
             for (const obj of MAP.objects.filter(o => 
-                o.type === 'closet' || o.type === 'bed' || o.type === 'sofa' || o.type === 'fridge')) {
+                o.type === 'closet' || o.type === 'bed' || o.type === 'sofa' || o.type === 'fridge' || o.type === 'car' || o.type === 'bathtub')) {
                 if (obj.floor !== player.floor) continue;
                 
                 if (Math.abs(obj.x - playerGridX) <= 1 && Math.abs(obj.y - playerGridY) <= 1) {
@@ -841,29 +1113,87 @@
             return false;
         }
         
+        // ===== ПРОВЕРКА КОНЦА ИГРЫ =====
+        function checkGameEnd() {
+            if (!gameActive) return;
+            
+            const activeSurvivors = Object.values(otherPlayers).filter(p => 
+                !p.isGranny && !p.caught).length;
+            
+            // Если Granny и все выжившие пойманы
+            if (player.isGranny && activeSurvivors === 0 && totalPlayers > 1) {
+                endGame('granny');
+            }
+            
+            // Если выживший и время вышло
+            if (!player.isGranny && getRemainingTime() <= 0) {
+                endGame('survivors');
+            }
+        }
+        
+        function getRemainingTime() {
+            const elapsed = (Date.now() - gameStartTime) / 1000;
+            return Math.max(0, totalGameTime - elapsed);
+        }
+        
+        function endGame(winner) {
+            gameActive = false;
+            
+            const roomRef = window.firebaseRef(window.firebaseDB, `rooms/${roomId}`);
+            window.firebaseUpdate(roomRef, {
+                gameOver: true,
+                winner: winner,
+                endTime: Date.now()
+            });
+            
+            showGameOver(winner);
+        }
+        
+        function showGameOver(winner) {
+            if (!gameActive) return;
+            gameActive = false;
+            
+            let title, message;
+            
+            if (winner === 'granny') {
+                title = '👵 Granny ПОБЕДИЛА!';
+                message = 'Все выжившие пойманы!<br>Granny защитила свой дом!';
+            } else if (winner === 'survivors') {
+                title = '🏃 ВЫЖИВШИЕ ПОБЕДИЛИ!';
+                message = 'Время вышло!<br>Выжившие пережили 2 минуты в доме Granny!';
+            } else {
+                title = 'ИГРА ОКОНЧЕНА';
+                message = 'Игра завершена';
+            }
+            
+            document.getElementById('gameOverTitle').textContent = title;
+            document.getElementById('gameOverText').innerHTML = message;
+            document.getElementById('gameOverScreen').classList.add('active');
+        }
+        
         // ===== ЗАПУСК ИГРЫ =====
         function startGame() {
             console.log('Запуск игры...');
             
-            // Прячем загрузочный экран
             setTimeout(() => {
                 document.getElementById('loadingScreen').classList.add('hidden');
                 gameActive = true;
                 
-                // Запускаем таймер
-                let gameTime = 120;
+                // Таймер игры
                 const timerInterval = setInterval(() => {
                     if (!gameActive) {
                         clearInterval(timerInterval);
                         return;
                     }
                     
-                    gameTime--;
-                    document.getElementById('timer').textContent = gameTime;
+                    const remaining = Math.floor(getRemainingTime());
+                    document.getElementById('timer').textContent = remaining;
                     
-                    if (gameTime <= 0) {
+                    if (remaining <= 0) {
                         clearInterval(timerInterval);
-                        endGame('Время вышло!');
+                        if (!player.isGranny) {
+                            endGame('survivors');
+                        }
                     }
                 }, 1000);
                 
@@ -872,14 +1202,6 @@
                 console.log('Игра запущена');
                 
             }, 1000);
-        }
-        
-        function endGame(message) {
-            gameActive = false;
-            setTimeout(() => {
-                alert(message);
-                exitGame();
-            }, 500);
         }
         
         function exitGame() {
@@ -891,11 +1213,8 @@
             window.location.href = 'index.html';
         }
         
-        // Предотвращаем выход по ошибке
         window.addEventListener('error', (e) => {
             console.error('Глобальная ошибка:', e.error);
-            document.getElementById('loadingScreen').classList.remove('hidden');
-            document.getElementById('loadingText').textContent = 'Ошибка загрузки. Обновите страницу.';
         });
     </script>
 </body>
