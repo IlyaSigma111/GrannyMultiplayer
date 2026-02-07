@@ -12,18 +12,149 @@
     <div class="container">
         <h1>🕷 Granny 2D Multiplayer</h1>
         <div id="menu">
-            <button onclick="createRoom()">Создать комнату</button>
+            <button id="createRoomBtn">Создать комнату</button>
             <div>
                 <input type="text" id="roomCode" placeholder="Код комнаты">
-                <button onclick="joinRoom()">Присоединиться</button>
+                <button id="joinRoomBtn">Присоединиться</button>
             </div>
             <div id="roomInfo" style="display:none;">
                 <p>Комната: <span id="roomId"></span></p>
                 <p>Игроков: <span id="playerCount">1</span>/5</p>
-                <button onclick="startGame()" id="startBtn" disabled>Начать игру (ждем игроков...)</button>
+                <button id="startBtn" disabled>Начать игру (ждем игроков...)</button>
             </div>
         </div>
     </div>
-    <script src="lobby.js"></script>
+
+    <script type="module">
+        import { database, ref, set, onValue, push, update, remove } from './firebase.js';
+
+        let currentRoomId = null;
+        let playerId = Math.random().toString(36).substring(2, 10);
+        let isGranny = false;
+
+        document.getElementById('createRoomBtn').addEventListener('click', createRoom);
+        document.getElementById('joinRoomBtn').addEventListener('click', joinRoom);
+        document.getElementById('startBtn').addEventListener('click', startGame);
+
+        function createRoom() {
+            const roomId = Math.random().toString(36).substring(2, 8).toUpperCase();
+            currentRoomId = roomId;
+            
+            const roomRef = ref(database, 'rooms/' + roomId);
+            set(roomRef, {
+                players: {
+                    [playerId]: {
+                        name: 'Игрок_' + playerId.substring(0, 4),
+                        isGranny: false,
+                        ready: false,
+                        joinedAt: Date.now()
+                    }
+                },
+                status: 'waiting',
+                createdAt: Date.now(),
+                maxPlayers: 5
+            }).then(() => {
+                document.getElementById('roomId').textContent = roomId;
+                document.getElementById('roomInfo').style.display = 'block';
+                setupRoomListeners(roomId);
+            }).catch(error => {
+                console.error("Ошибка создания комнаты:", error);
+                alert('Ошибка создания комнаты: ' + error.message);
+            });
+        }
+
+        function joinRoom() {
+            const roomId = document.getElementById('roomCode').value.trim().toUpperCase();
+            if (!roomId) return alert('Введите код комнаты!');
+            
+            currentRoomId = roomId;
+            const roomRef = ref(database, 'rooms/' + roomId);
+            
+            onValue(roomRef, (snapshot) => {
+                if (!snapshot.exists()) {
+                    alert('Комната не найдена!');
+                    return;
+                }
+                
+                const data = snapshot.val();
+                if (data.status !== 'waiting') {
+                    alert('Игра уже началась!');
+                    return;
+                }
+                
+                const updates = {};
+                updates[`players/${playerId}`] = {
+                    name: 'Игрок_' + playerId.substring(0, 4),
+                    isGranny: false,
+                    ready: false,
+                    joinedAt: Date.now()
+                };
+                
+                update(roomRef, updates).then(() => {
+                    document.getElementById('roomId').textContent = roomId;
+                    document.getElementById('roomInfo').style.display = 'block';
+                    setupRoomListeners(roomId);
+                });
+            }, { onlyOnce: true });
+        }
+
+        function setupRoomListeners(roomId) {
+            const roomRef = ref(database, 'rooms/' + roomId);
+            
+            onValue(roomRef, (snapshot) => {
+                const data = snapshot.val();
+                if (!data) {
+                    alert('Комната удалена!');
+                    window.location.reload();
+                    return;
+                }
+                
+                const players = data.players || {};
+                const playerCount = Object.keys(players).length;
+                
+                document.getElementById('playerCount').textContent = playerCount;
+                
+                document.getElementById('startBtn').disabled = playerCount < 2;
+                document.getElementById('startBtn').textContent = 
+                    playerCount < 2 ? 'Начать игру (ждем игроков...)' : 'Начать игру!';
+                
+                if (data.status === 'playing') {
+                    for (const [id, player] of Object.entries(players)) {
+                        if (player.isGranny) {
+                            isGranny = (id === playerId);
+                            break;
+                        }
+                    }
+                    window.location.href = `game.html?room=${roomId}&player=${playerId}&granny=${isGranny}`;
+                }
+            });
+        }
+
+        function startGame() {
+            if (!currentRoomId) return;
+            
+            const roomRef = ref(database, 'rooms/' + currentRoomId);
+            const playersRef = ref(database, 'rooms/' + currentRoomId + '/players');
+            
+            onValue(playersRef, (snapshot) => {
+                const players = snapshot.val();
+                if (!players) return;
+                
+                const playerIds = Object.keys(players);
+                const grannyId = playerIds[Math.floor(Math.random() * playerIds.length)];
+                
+                const updates = {};
+                playerIds.forEach(id => {
+                    updates[`players/${id}/isGranny`] = (id === grannyId);
+                });
+                
+                updates['status'] = 'playing';
+                updates['startedAt'] = Date.now();
+                updates['timer'] = 120;
+                
+                update(roomRef, updates);
+            }, { onlyOnce: true });
+        }
+    </script>
 </body>
 </html>
