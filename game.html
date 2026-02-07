@@ -1,195 +1,97 @@
-.game-container {
-    max-width: 1000px;
-    margin: 0 auto;
-    padding: 10px;
-}
-
-.game-header {
-    display: flex;
-    justify-content: space-between;
-    background: rgba(0, 0, 0, 0.8);
-    padding: 10px 20px;
-    border-radius: 10px;
-    margin-bottom: 10px;
-    flex-wrap: wrap;
-}
-
-.timer, .role, .players-online {
-    font-size: 1.2rem;
-    font-weight: bold;
-}
-
-.timer {
-    color: #ffcc00;
-}
-
-.role {
-    color: #00ff88;
-}
-
-.players-online {
-    color: #00a8ff;
-}
-
-#gameCanvas {
-    display: block;
-    margin: 0 auto;
-    background: #111;
-    border-radius: 10px;
-    border: 3px solid #333;
-    max-width: 100%;
-    height: auto;
-}
-
-.controls {
-    margin-top: 15px;
-    text-align: center;
-}
-
-.desktop-controls p {
-    color: #aaa;
-    font-size: 0.9rem;
-}
-
-.mobile-controls {
-    display: none;
-    justify-content: space-between;
-    margin-top: 20px;
-    padding: 0 10px;
-}
-
-.d-pad {
-    position: relative;
-    width: 150px;
-    height: 150px;
-}
-
-.d-btn {
-    position: absolute;
-    width: 50px;
-    height: 50px;
-    background: rgba(255, 255, 255, 0.2);
-    border: 2px solid #fff;
-    color: white;
-    font-size: 24px;
-    border-radius: 50%;
-    cursor: pointer;
-    user-select: none;
-    touch-action: manipulation;
-}
-
-.d-btn:active {
-    background: rgba(255, 255, 255, 0.4);
-}
-
-.up { top: 0; left: 50px; }
-.left { top: 50px; left: 0; }
-.down { top: 50px; left: 100px; }
-.right { top: 50px; right: 0; }
-
-.action-buttons {
-    display: flex;
-    flex-direction: column;
-    gap: 20px;
-}
-
-.action-btn {
-    padding: 15px 25px;
-    background: linear-gradient(45deg, #ff4757, #ff2e43);
-    border: none;
-    border-radius: 10px;
-    color: white;
-    font-size: 1rem;
-    font-weight: bold;
-    cursor: pointer;
-    min-width: 120px;
-    user-select: none;
-    touch-action: manipulation;
-}
-
-.action-btn:active {
-    transform: scale(0.95);
-}
-
-.game-log {
-    background: rgba(0, 0, 0, 0.7);
-    border-radius: 10px;
-    padding: 15px;
-    margin-top: 15px;
-    max-height: 120px;
-    overflow-y: auto;
-    font-size: 0.9rem;
-    color: #ccc;
-}
-
-.modal {
-    display: none;
-    position: fixed;
-    top: 0;
-    left: 0;
-    width: 100%;
-    height: 100%;
-    background: rgba(0, 0, 0, 0.9);
-    justify-content: center;
-    align-items: center;
-    z-index: 1000;
-}
-
-.modal-content {
-    background: #1a1a2e;
-    padding: 30px;
-    border-radius: 15px;
-    text-align: center;
-    max-width: 400px;
-    width: 90%;
-    border: 3px solid #ff4757;
-}
-
-.modal-content h2 {
-    color: #ff4757;
-    margin-bottom: 20px;
-}
-
-.modal-content button {
-    margin-top: 20px;
-    padding: 12px 30px;
-}
-
-@media (max-width: 768px) {
-    .game-header {
-        flex-direction: column;
-        gap: 10px;
-        text-align: center;
-    }
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Granny 2D - Игра</title>
+    <link rel="stylesheet" href="style.css">
+    <link rel="stylesheet" href="game.css">
+    <script type="module" src="firebase.js"></script>
+    <script src="https://unpkg.com/peerjs@1.4.7/dist/peerjs.min.js"></script>
+    <style>
+        /* Временно добавьте CSS сюда, чтобы проверить */
+        body { background: #1a1a2e; color: white; }
+        canvas { border: 2px solid red; }
+    </style>
+</head>
+<body>
+    <div class="game-container">
+        <div class="game-header">
+            <div class="timer">
+                <span id="timer">120</span> сек
+            </div>
+            <div class="role">
+                Вы: <span id="roleText">Выживший</span>
+            </div>
+            <div class="players-online">
+                Игроков: <span id="playersCount">1</span>
+            </div>
+        </div>
+        
+        <canvas id="gameCanvas" width="800" height="600"></canvas>
+        
+        <div class="controls">
+            <div class="desktop-controls">
+                <p>WASD - двигаться, SPACE - спрятаться, E - взаимодействовать</p>
+            </div>
+            
+            <div class="mobile-controls">
+                <div class="d-pad">
+                    <button class="d-btn up" data-key="w">↑</button>
+                    <button class="d-btn left" data-key="a">←</button>
+                    <button class="d-btn down" data-key="s">↓</button>
+                    <button class="d-btn right" data-key="d">→</button>
+                </div>
+                <div class="action-buttons">
+                    <button class="action-btn hide-btn" data-action="hide">Прятаться</button>
+                    <button class="action-btn interact-btn" data-action="interact">Действие</button>
+                </div>
+            </div>
+        </div>
+        
+        <div class="game-log" id="gameLog">
+            <p>Добро пожаловать в дом Granny!</p>
+        </div>
+    </div>
     
-    #gameCanvas {
-        width: 100%;
-        height: 300px;
-    }
+    <div id="resultModal" class="modal" style="display:none;">
+        <div class="modal-content">
+            <h2 id="resultTitle">Игра окончена!</h2>
+            <p id="resultText"></p>
+            <button onclick="window.location.href='index.html'">В лобби</button>
+        </div>
+    </div>
     
-    .desktop-controls {
-        display: none;
-    }
-    
-    .mobile-controls {
-        display: flex;
-    }
-}
-
-@media (max-width: 480px) {
-    .d-pad {
-        width: 130px;
-        height: 130px;
-    }
-    
-    .d-btn {
-        width: 45px;
-        height: 45px;
-        font-size: 20px;
-    }
-    
-    .action-btn {
-        padding: 12px 20px;
-        min-width: 100px;
-    }
-}
+    <script type="module">
+        // Показываем отладку
+        console.log('Game page loaded');
+        console.log('URL params:', window.location.search);
+        
+        // Временно простой тест
+        const canvas = document.getElementById('gameCanvas');
+        const ctx = canvas.getContext('2d');
+        
+        // Рисуем тестовый круг
+        ctx.fillStyle = '#ff4757';
+        ctx.beginPath();
+        ctx.arc(400, 300, 50, 0, Math.PI * 2);
+        ctx.fill();
+        
+        ctx.fillStyle = 'white';
+        ctx.font = '20px Arial';
+        ctx.fillText('Игра загружается...', 300, 320);
+        
+        // Проверяем параметры
+        const urlParams = new URLSearchParams(window.location.search);
+        const room = urlParams.get('room');
+        const player = urlParams.get('player');
+        const granny = urlParams.get('granny');
+        
+        console.log('Room:', room, 'Player:', player, 'Granny:', granny);
+        
+        if (!room || !player) {
+            ctx.fillText('Ошибка: нет параметров комнаты!', 250, 350);
+        }
+    </script>
+</body>
+</html>
